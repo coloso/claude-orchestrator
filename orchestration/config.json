@@ -11,7 +11,7 @@
     "allowed_tools": [
       "Read", "Glob", "Grep", "Edit", "Write",
       "Bash(backend/check.sh:*)", "Bash(./check.sh:*)", "Bash(cd:*)",
-      "Bash(go generate:*)", "Bash(go tool ogen:*)",
+      "Bash(go generate:*)", "Bash(go tool ogen:*)", "Bash(go tool gosec:*)", "Bash(go tool govulncheck:*)",
       "Bash(go test:*)", "Bash(go vet:*)", "Bash(go build:*)", "Bash(gofmt:*)",
       "Bash(npm test:*)", "Bash(npm run typecheck:*)",
       "Bash(ls:*)", "Bash(cat:*)"
@@ -22,6 +22,8 @@
     "model": "sonnet",
     "allowed_tools": ["Read", "Glob", "Grep"]
   },
+
+  "require_tests_for": ["backend/internal/*/domain/*.go", "backend/internal/*/app/*.go"],
 
   "gates": [
     { "name": "backend",  "paths": ["backend/**"],  "cwd": "backend",  "cmd": "./check.sh" },

@@ -7,7 +7,7 @@
 <style>
   :root {
     --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6b7280; --border: #e3e6eb;
-    --pending: #9ca3af; --claimed: #2563eb; --passed: #7c3aed; --done: #16a34a; --failed: #dc2626;
+    --proposed: #d97706; --pending: #9ca3af; --claimed: #2563eb; --passed: #7c3aed; --done: #16a34a; --failed: #dc2626;
   }
   @media (prefers-color-scheme: dark) {
     :root { --bg: #0f1218; --panel: #171b23; --text: #e5e7eb; --muted: #9ca3af; --border: #2a303b; }
@@ -22,7 +22,7 @@
   .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; min-width: 0; }
   .card b { display: block; overflow-wrap: anywhere; }
-  .board { display: grid; gap: 10px; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .board { display: grid; gap: 10px; grid-template-columns: repeat(6, minmax(0, 1fr)); }
   @media (max-width: 800px) { .board { grid-template-columns: 1fr; } }
   .col { display: flex; flex-direction: column; gap: 8px; }
   .col h3 { font-size: 13px; margin: 0; display: flex; align-items: center; }
@@ -50,8 +50,8 @@
 <div id="events"></div>
 
 <script>
-const STATUSES = ["pending", "claimed", "passed", "done", "failed"];
-const LABELS = { pending: "Pending", claimed: "In progress", passed: "Passed gate", done: "Merged", failed: "Failed" };
+const STATUSES = ["proposed", "pending", "claimed", "passed", "done", "failed"];
+const LABELS = { proposed: "Proposed", pending: "Pending", claimed: "In progress", passed: "Passed gate", done: "Merged", failed: "Failed" };
 const AGENT_COLOR = { idle: "--pending", working: "--claimed", gating: "--passed", stopped: "--muted" };
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const time = (ts) => new Date(ts * 1000).toLocaleTimeString();
@@ -78,6 +78,8 @@ function render(s) {
           <span class="tag">${esc(t.role)}</span>
           ${t.agent ? `<span class="tag">${esc(t.agent)}</span>` : ""}
           ${t.attempts > 1 ? `<span class="tag">attempt ${t.attempts}</span>` : ""}
+          ${t.severity ? `<span class="tag">${esc(t.severity)}</span>` : ""}
+          ${t.status === "proposed" ? `<div class="muted">approve: orchestrator.py approve ${esc(t.id)}</div>` : ""}
           ${t.depends_on?.length ? `<div class="muted">after ${t.depends_on.map(esc).join(", ")}</div>` : ""}
           ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}
         </div>`).join("")}

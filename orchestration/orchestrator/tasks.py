@@ -6,6 +6,7 @@ Each task is a JSON file; its status is the directory it lives in:
                                   \\-> failed/ (requeued until max_attempts)
 
 Claiming is an atomic os.rename, so two workers can never grab the same task.
+Agents can propose follow-up tasks; they wait in proposed/ until a human approves them.
 """
 from __future__ import annotations
 
@@ -60,11 +61,11 @@ def is_ready(task: dict, done: set) -> bool:
     return all(dep in done for dep in task.get("depends_on", []))
 
 
-def claim(agent_id: str) -> Optional[dict]:
-    """Claim the first pending task whose dependencies are all done."""
+def claim(agent_id: str, only: set = frozenset()) -> Optional[dict]:
+    """Claim the first pending task whose dependencies are all done (restricted to `only` if given)."""
     done = ids_in("done")
     for task in list_tasks("pending"):
-        if not is_ready(task, done):
+        if (only and task["id"] not in only) or not is_ready(task, done):
             continue
         try:
             os.rename(path("pending", task["id"]), path("claimed", task["id"]))
@@ -76,6 +77,34 @@ def claim(agent_id: str) -> Optional[dict]:
         write("claimed", task)
         return task
     return None
+
+
+PROPOSAL_FIELDS = ("title", "role", "prompt", "scope")
+
+
+def propose(source: dict, proposals: list) -> tuple:
+    """Store an agent's proposals as <source id>.<n> in proposed/. Returns (ids, errors)."""
+    ids, errors = [], []
+    prefix = f"{source['id']}."
+    taken = [int(tid[len(prefix):]) for tid in all_tasks() if tid.startswith(prefix) and tid[len(prefix):].isdigit()]
+    start = max(taken, default=0) + 1
+    for n, p in enumerate(proposals, start=start):
+        missing = [f for f in PROPOSAL_FIELDS if not p.get(f)] if isinstance(p, dict) else list(PROPOSAL_FIELDS)
+        if missing:
+            errors.append(f"proposal {n}: missing {missing}")
+            continue
+        task = {k: p[k] for k in PROPOSAL_FIELDS}
+        task.update(
+            id=f"{source['id']}.{n}",
+            depends_on=list(p.get("depends_on", [])),
+            proposed_by=source["id"],
+            severity=p.get("severity"),
+            rationale=p.get("rationale"),
+            attempts=0,
+        )
+        write("proposed", task)
+        ids.append(task["id"])
+    return ids, errors
 
 
 def add(task: dict) -> None:

@@ -1,4 +1,4 @@
-// Package server builds the root HTTP handler from the generated ogen server.
+// Package server wraps an oas.Handler in the ogen server and renders transport-level errors.
 package server
 
 import (
@@ -8,13 +8,12 @@ import (
 
 	"github.com/ogen-go/ogen/ogenerrors"
 
-	"orch-test/backend/internal/handler"
 	"orch-test/backend/internal/oas"
 )
 
-// New returns the application's root handler.
-func New() (http.Handler, error) {
-	return oas.NewServer(handler.New(),
+// New returns the root HTTP handler for h.
+func New(h oas.Handler) (http.Handler, error) {
+	return oas.NewServer(h,
 		oas.WithErrorHandler(writeError),
 		oas.WithNotFound(func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, "no route for "+r.Method+" "+r.URL.Path)

@@ -1,7 +1,11 @@
 #!/bin/sh
-# Backend checks. Agents run this before finishing; the orchestrator's quality gate runs it too.
+# Backend checks: generate drift, gofmt, vet, tests (incl. archtest), coverage, gosec, govulncheck.
+# Agents run this before finishing; the orchestrator's quality gate runs it too.
 set -e
 cd "$(dirname "$0")"
+
+# Minimum statement coverage for the inner layers (internal/<context>/domain and app).
+MIN_COVERAGE=${MIN_COVERAGE:-80}
 
 oas_sum() { find internal/oas -type f -name '*.go' | sort | xargs cat | shasum; }
 
@@ -23,5 +27,28 @@ fi
 echo "==> go vet"
 go vet ./...
 
-echo "==> go test"
-go test ./...
+echo "==> go test (includes internal/archtest dependency rules)"
+if ! out=$(go test -cover ./... 2>&1); then
+  echo "$out"; exit 1
+fi
+echo "$out"
+
+echo "==> coverage >= ${MIN_COVERAGE}% for domain and app packages"
+echo "$out" | awk -v min="$MIN_COVERAGE" '
+  {
+    pkg = ""
+    for (i = 1; i <= NF; i++) if ($i ~ /\/internal\/[^\/]+\/(domain|app)$/) pkg = $i
+    if (pkg == "") next
+    cov = -1
+    for (i = 1; i < NF; i++) if ($i == "coverage:") { cov = $(i + 1); sub("%", "", cov) }
+    if (cov ~ /^\[no/) next   # "[no statements]": nothing to cover
+    if (cov < 0 || cov + 0 < min) { printf "  %s: %s (want >= %s%%)\n", pkg, (cov < 0 ? "no tests" : cov "%"), min; bad = 1 }
+  }
+  END { exit bad }
+' || { echo "Inner layers are built test-first: add the missing tests."; exit 1; }
+
+echo "==> security: gosec (static analysis)"
+go tool gosec -quiet -color=false -exclude-generated -exclude-dir=internal/oas ./...
+
+echo "==> security: govulncheck (known vulnerabilities in called dependencies)"
+go tool govulncheck ./...

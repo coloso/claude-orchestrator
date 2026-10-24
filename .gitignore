@@ -1,6 +1,7 @@
 # Orchestration runtime state
 .orch/
 .worktrees/
+.orch-proposals.json
 
 # Orchestrator (Python stdlib only)
 __pycache__/

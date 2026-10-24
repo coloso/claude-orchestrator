@@ -1,0 +1,35 @@
+name: orch-test
+
+services:
+  mongo:
+    image: mongo:8.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:27017:27017" # local dev and MONGO_TEST_URI tests only
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      STORAGE: mongo
+      MONGO_URI: mongodb://mongo:27017
+      MONGO_DB: orch
+      CORS_ORIGIN: http://localhost:5173
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  # frontend: Vue 3 + TypeScript, added later
+
+volumes:
+  mongo-data:

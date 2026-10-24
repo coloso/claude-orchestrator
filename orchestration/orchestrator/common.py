@@ -19,7 +19,11 @@ STOP_FILE = ORCH / "STOP"
 WORKTREES = ROOT / ".worktrees"
 ROLES_DIR = TOOLING / "roles"
 
-STATUSES = ["pending", "claimed", "passed", "done", "failed"]
+# "proposed" tasks come from agents and wait for `orchestrator.py approve`; "rejected" is terminal.
+STATUSES = ["proposed", "pending", "claimed", "passed", "done", "failed", "rejected"]
+
+# Agents write follow-up task proposals here, at their worktree root (gitignored, never committed).
+PROPOSALS_FILE = ".orch-proposals.json"
 
 
 def load_config() -> dict:
