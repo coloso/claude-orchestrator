@@ -1,6 +1,6 @@
 # S<NN>: <short title>
 
-<!-- Copy to stories/S<NN>-<slug>.md. The planner turns it into orchestration/plans/S<NN>-<slug>.json
+<!-- Copy to backlog/stories/S<NN>-<slug>.md. The planner turns it into backlog/plans/S<NN>-<slug>.json
      with task IDs S<NN>-01, S<NN>-02, ... Write in domain language; leave implementation to the agents. -->
 
 ## Story

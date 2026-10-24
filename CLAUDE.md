@@ -50,7 +50,8 @@ Schema changes are migrations. Each bounded context exposes `Migrations()` in `i
 Other folders:
 - `frontend/` — reserved for a Vue 3 + TypeScript app (not set up yet)
 - `docs/` — Markdown documentation; `docs/security/` holds security review reports
-- `orchestration/` — the tooling that runs you (orchestrator, roles, plans, dashboard). **Never modify it.**
+- `backlog/` — stories and plans, written by humans. **Never modify it.**
+- `orchestration/` — the tooling that runs you (orchestrator, roles, dashboard). **Never modify it.**
 
 ## Rules
 - Only create or modify files inside the scope listed in your task. Changes outside it are rejected.
@@ -62,7 +63,7 @@ Other folders:
 - Migrations are part of a context's adapter/mongodb package and are tested with the MongoDB tests (`make test-mongo`).
 - Before finishing, run `backend/check.sh`: generate drift check, gofmt, vet, tests (including archtest), coverage, gosec and govulncheck. It must pass.
 - **Work outside your scope:** don't do it. Propose it instead.
-  - Write a JSON array of follow-up tasks to `.orch-proposals.json` at the worktree root. Each entry has `title`, `role`, `prompt` and `scope`, plus optional `depends_on`, `model` (`haiku`, `sonnet` or `opus`), `effort` (`low` … `xhigh`), `severity` and `rationale`.
+  - Write a JSON array of follow-up tasks to `.orch-proposals.json` at the worktree root. Each entry has `title`, `role`, `prompt` and `scope`, plus optional `depends_on` (existing task IDs, or titles of other proposals in the same file), `model` (`haiku`, `sonnet` or `opus`), `effort` (`low` … `xhigh`), `severity` and `rationale`.
   - The file is never committed. A human reviews the proposals and approves or rejects them.
 
 ## How a feature flows

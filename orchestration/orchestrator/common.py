@@ -19,6 +19,13 @@ STATE_FILE = ORCH / "state.json"
 STOP_FILE = ORCH / "STOP"
 WORKTREES = ROOT / ".worktrees"
 ROLES_DIR = TOOLING / "roles"
+# Roles the orchestrator runs itself; they never get tasks from a plan or a proposal.
+NON_WORKER_ROLES = ("planner", "lead")
+
+# Human-written input, kept out of the tooling: stories, and the plans the planner makes from them.
+BACKLOG = ROOT / "backlog"
+STORY_FILES_DIR = BACKLOG / "stories"
+PLANS_DIR = BACKLOG / "plans"
 
 # "proposed" tasks come from agents and wait for `orchestrator.py approve`; "rejected" is terminal.
 STATUSES = ["proposed", "pending", "claimed", "passed", "done", "failed", "rejected"]
@@ -30,13 +37,14 @@ PROPOSALS_FILE = ".orch-proposals.json"
 def load_config() -> dict:
     config = json.loads((TOOLING / "config.json").read_text())
     models = config["models"]
-    ids = [models["planner"]["id"], *(w["id"] for w in models["workers"].values())]
+    single = [models["planner"], *(models[k] for k in ("reviewer", "lead") if k in models)]
+    ids = [m["id"] for m in single] + [w["id"] for w in models["workers"].values()]
     banned = [i for i in ids for word in models.get("forbidden", []) if word in i.lower()]
     if banned:
         raise SystemExit(f"config.json: forbidden model(s) {banned} (models.forbidden = {models['forbidden']})")
     if models["default_worker"] not in models["workers"]:
         raise SystemExit(f"config.json: default_worker '{models['default_worker']}' is not in models.workers")
-    bad = [e for e in (m.get("effort") for m in [models["planner"], *models["workers"].values()])
+    bad = [e for e in (m.get("effort") for m in [*single, *models["workers"].values()])
            if e and e not in models["efforts"]]
     if bad:
         raise SystemExit(f"config.json: effort(s) {bad} not in models.efforts {models['efforts']}")

@@ -15,9 +15,27 @@
     :root { --bg: #0f1218; --panel: #171b23; --text: #e5e7eb; --muted: #9ca3af; --border: #2a303b; --code: #1f2430; }
   }
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 20px 16px 60px; font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  body { margin: 0; padding: 0 16px 60px; transition: padding-right .15s; font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--text); }
   main { max-width: 1400px; margin: 0 auto; }
   h1 { font-size: 18px; margin: 0; }
+
+  /* top bar */
+  header.bar { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 14px 0 10px; border-bottom: 1px solid var(--border); }
+  .progress { display: flex; height: 6px; flex: 1 1 160px; max-width: 360px; border-radius: 3px; overflow: hidden; background: var(--code); }
+  .progress span { display: block; height: 100%; }
+  #progress-label { font-size: 12px; }
+  .pill.warn { border-color: var(--warn); color: var(--warn); }
+
+  /* filters */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+  .chip { border-radius: 999px; padding: 2px 10px; }
+  .chip.on { background: var(--text); color: var(--panel); border-color: var(--text); }
+  .chip .n { opacity: .65; margin-left: 4px; }
+  details.stage > summary { list-style: none; font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+  details.stage > summary::-webkit-details-marker { display: none; }
+  details.stage > summary::before { content: "▸ "; }
+  details.stage[open] > summary::before { content: "▾ "; }
+  label.toggle { font-size: 12px; color: var(--muted); text-transform: none; letter-spacing: 0; cursor: pointer; margin-left: 8px; }
   h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 26px 0 8px; }
   code, pre { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
   pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
@@ -52,10 +70,29 @@
   #events div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* drawer */
-  #drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(640px, 100vw); background: var(--panel); border-left: 1px solid var(--border);
-            transform: translateX(100%); transition: transform .15s; overflow: auto; padding: 16px; z-index: 10; box-shadow: -8px 0 24px rgba(0,0,0,.12); }
+  :root { --drawer-w: min(640px, 100vw); }
+  /* On wide screens the page makes room for the drawer instead of being covered by it. */
+  @media (min-width: 1000px) {
+    :root { --drawer-w: clamp(420px, 40vw, 640px); }
+    body.drawer-open { padding-right: calc(var(--drawer-w) + 16px); }
+  }
+  #drawer { position: fixed; top: 0; right: 0; bottom: 0; width: var(--drawer-w); background: var(--panel); border-left: 1px solid var(--border);
+            transform: translateX(100%); transition: transform .15s; overflow: auto; z-index: 10; box-shadow: -8px 0 24px rgba(0,0,0,.12); outline: none; }
   #drawer.open { transform: none; }
-  #drawer h3 { margin: 0 0 4px; font-size: 16px; }
+  #drawer .head { position: sticky; top: 0; z-index: 1; background: var(--panel); border-bottom: 1px solid var(--border); padding: 12px 12px 10px 16px; }
+  #drawer .head .top { display: flex; align-items: flex-start; gap: 12px; }
+  #drawer .body { padding: 4px 16px 24px; }
+  #drawer h3 { margin: 2px 0 0; font-size: 16px; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  #drawer .keys { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .icons { display: flex; gap: 2px; flex: none; }
+  .icon { width: 28px; height: 28px; display: inline-grid; place-items: center; padding: 0; border: 0; background: transparent; color: var(--muted); border-radius: 6px; }
+  .icon:hover:not(:disabled) { background: var(--code); color: var(--text); }
+  .icon:disabled { opacity: .35; cursor: default; }
+  .icon:focus-visible, .task:focus-visible { outline: 2px solid var(--claimed); outline-offset: 1px; }
+  .icon svg { width: 16px; height: 16px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  kbd { font: 11px ui-monospace, monospace; padding: 0 4px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; background: var(--code); }
+  #drawer .cmd { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+  #drawer .cmd pre { flex: 1; background: var(--code); padding: 6px 8px; border-radius: 6px; }
   #drawer h4 { margin: 16px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
   .box { background: var(--code); border-radius: 6px; padding: 8px; max-height: 360px; overflow: auto; }
   #drawer .box { background: var(--code); border-radius: 6px; padding: 8px; max-height: 360px; overflow: auto; }
@@ -66,10 +103,14 @@
 </head>
 <body>
 <main>
-  <header class="row">
-    <h1>Agent Orchestra</h1>
-    <span id="runpill" class="pill"><span class="dot"></span><span>waiting for state…</span></span>
-    <span id="meta" class="muted"></span>
+  <header class="bar">
+    <div class="row">
+      <h1>Agent Orchestra</h1>
+      <span id="runpill" class="pill"><span class="dot"></span><span>waiting for state…</span></span>
+      <div id="progress" class="progress" hidden></div>
+      <span id="progress-label" class="muted"></span>
+    </div>
+    <div id="meta" class="muted" style="font-size:12px;margin-top:4px"></div>
   </header>
 
   <h2>What now?</h2>
@@ -90,14 +131,16 @@
     <div id="agents" class="agents"></div>
   </div>
 
-  <h2>Tasks <span id="counts" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
+  <h2>Tasks</h2>
+  <div id="filters" class="chips"></div>
   <div id="stages"></div>
 
-  <h2>Events <span id="evfilter" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
+  <h2>Events <span id="evfilter" class="muted" style="text-transform:none;letter-spacing:0"></span>
+    <label class="toggle"><input type="checkbox" id="showtools"> show tool calls</label></h2>
   <div id="events" class="card"></div>
 </main>
 
-<aside id="drawer" aria-label="Task details"></aside>
+<aside id="drawer" aria-label="Task details" tabindex="-1"></aside>
 
 <script>
 const LABEL = { proposed: "proposed — needs you", pending: "pending", claimed: "in progress", passed: "passed gate", done: "merged", failed: "failed", rejected: "rejected" };
@@ -107,6 +150,21 @@ const dur = (s) => s == null ? "" : s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(
 const money = (v) => v ? `$${v.toFixed(2)}` : "";
 let state = null;
 let selected = decodeURIComponent(location.hash.slice(1)) || null;
+// Per-viewer view settings; storage can be unavailable (private mode), so every access is guarded.
+const pref = (k, d) => { try { return JSON.parse(localStorage.getItem(`orch.${k}`)) ?? d; } catch { return d; } };
+const setPref = (k, v) => { try { localStorage.setItem(`orch.${k}`, JSON.stringify(v)); } catch {} };
+let filter = pref("filter", "all");
+const openStages = new Set();
+const FILTERS = {
+  all: ["All", () => true],
+  needs: ["Needs you", (t) => t.status === "proposed" || t.status === "failed"],
+  active: ["Active", (t) => ["pending", "claimed", "passed"].includes(t.status)],
+  failed: ["Failed", (t) => t.status === "failed"],
+  done: ["Done", (t) => t.status === "done" || t.status === "rejected"],
+};
+const STATUS_ORDER = ["done", "passed", "claimed", "pending", "failed", "proposed", "rejected"];
+// "/…/.worktrees/S01-08.3/backend/x.go" -> "backend/x.go"
+const shortPaths = (s) => String(s ?? "").replace(/\S*\/\.worktrees\/[^/\s]+\//g, "");
 
 function copy(btn, text) {
   navigator.clipboard?.writeText(text).then(() => { btn.textContent = "copied"; setTimeout(() => (btn.textContent = "copy"), 1200); });
@@ -118,9 +176,47 @@ function renderHeader(s) {
   const [color, text] = r.active ? ["--claimed", `running · ${busy}/${s.agents.length} agents busy${r.fake ? " · dry run" : ""}`]
     : s.planner && !s.planner.finished && Date.now() / 1000 - s.planner.updated < 120 ? ["--proposed", "planning"]
     : ["--pending", "idle"];
-  pill.innerHTML = `<span class="dot" style="background:var(${color})"></span><span>${text}</span>`;
+  const age = Date.now() / 1000 - s.updated;
+  const stale = age > 10;
+  pill.classList.toggle("warn", stale);
+  pill.innerHTML = stale
+    ? `<span class="dot" style="background:var(--warn)"></span><span>state is ${dur(Math.round(age))} old · is <code>make dashboard</code> or <code>make run</code> still running?</span>`
+    : `<span class="dot" style="background:var(${color})"></span><span>${text}</span>`;
   document.getElementById("meta").textContent =
     `branch ${s.git.branch}${s.git.dirty.length ? ` (${s.git.dirty.length} uncommitted)` : ""} · MongoDB ${s.mongo_up ? "up" : "down"} · agent cost ${money(s.cost_usd) || "$0.00"} · updated ${clock(s.updated)}`;
+
+  // Overall progress, one segment per status.
+  const total = s.tasks.length, bar = document.getElementById("progress");
+  const counts = {};
+  s.tasks.forEach((t) => (counts[t.status] = (counts[t.status] || 0) + 1));
+  bar.hidden = !total;
+  bar.innerHTML = STATUS_ORDER.filter((k) => counts[k]).map((k) =>
+    `<span style="width:${(100 * counts[k]) / total}%;background:var(--${k})" title="${counts[k]} ${LABEL[k]}"></span>`).join("");
+  document.getElementById("progress-label").textContent = total
+    ? `${counts.done || 0}/${total} merged${counts.claimed ? ` · ${counts.claimed} in progress` : ""}${counts.failed ? ` · ${counts.failed} failed` : ""}` : "";
+
+  // Tab title and icon, readable from another tab.
+  const needs = (counts.proposed || 0) + (counts.failed || 0);
+  const word = stale ? "stale" : r.active ? "running" : "idle";
+  document.title = `${needs ? `(${needs}) ` : ""}${word} · Agent Orchestra`;
+  setFavicon(stale ? "#d97706" : counts.failed ? "#dc2626" : needs ? "#d97706" : r.active ? "#2563eb" : "#9ca3af");
+}
+
+let faviconColor = null;
+function setFavicon(color) {
+  if (color === faviconColor) return;
+  faviconColor = color;
+  let link = document.querySelector("link[rel=icon]");
+  if (!link) { link = document.createElement("link"); link.rel = "icon"; document.head.appendChild(link); }
+  link.href = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="${color}"/></svg>`)}`;
+}
+
+function renderOffline() {
+  const pill = document.getElementById("runpill");
+  pill.classList.add("warn");
+  pill.innerHTML = `<span class="dot" style="background:var(--warn)"></span><span>dashboard server not reachable · start <code>make dashboard</code></span>`;
+  document.title = "offline · Agent Orchestra";
+  setFavicon("#9ca3af");
 }
 
 function renderHints(s) {
@@ -144,10 +240,49 @@ function renderStories(s) {
       <div class="row"><b>${esc(st.plan)}</b><code>${esc(st.branch)}</code><span class="muted">${label}</span>
         <span class="muted">${st.done}/${st.tasks} tasks merged${st.complete ? ` · ${st.commits} commits · ${st.files} files` : ""}${st.base ? ` · from ${esc(st.base)}` : ""}${st.proposals?.length ? ` · ${st.proposals.length} proposal(s) waiting` : ""}</span></div>
       ${failed.map((c) => `<details open><summary>${esc(c.gate)} gate failed</summary><pre class="box err">${esc(c.output)}</pre></details>`).join("")}
+      ${leadBlock(st)}
       ${st.review ? `<div class="cmd"><pre>${esc(st.review)}</pre><button data-story="${i}">copy</button></div>` : ""}
     </div>`;
   }).join("");
   document.querySelectorAll("#stories [data-story]").forEach((b) => (b.onclick = () => copy(b, list[b.dataset.story].review)));
+  document.querySelectorAll("#stories details[data-report]").forEach((d) => d.addEventListener("toggle", () => {
+    const f = d.dataset.report;
+    d.open ? openReports.add(f) : openReports.delete(f);
+    if (d.open) loadReport(f);
+  }));
+}
+
+const LEAD = {
+  approve: ["--ok", "approved"],
+  changes_requested: ["--warn", "changes requested"],
+  error: ["--failed", "review failed"],
+};
+const openReports = new Set(), reports = {};
+async function loadReport(file) {
+  try {
+    const res = await fetch(`/${file}`, { cache: "no-store" });
+    reports[file] = res.ok ? await res.text() : "Report not available.";
+  } catch { reports[file] = "Report not available."; }
+  document.querySelectorAll(`#stories pre[data-report-body="${CSS.escape(file)}"]`).forEach((p) => (p.textContent = reports[file]));
+}
+
+function leadBlock(st) {
+  const r = st.lead;
+  if (!r?.verdict && !st.pr_commit) return "";
+  const [color, label] = LEAD[r?.verdict] || ["--info", "not reviewed"];
+  return `<div style="margin-top:8px">
+    ${r?.verdict ? `<div class="row" style="gap:8px">
+      <span class="pill"><span class="dot" style="background:var(${color})"></span>Lead engineer: ${label}</span>
+      ${r.proposals?.length ? `<span class="muted">${r.proposals.length} fix(es) proposed: ${r.proposals.map((id) => `<a href="#${esc(id)}">${esc(id)}</a>`).join(", ")}</span>` : ""}
+      ${r.cost_usd ? `<span class="muted">${money(r.cost_usd)}</span>` : ""}
+    </div>
+    ${r.summary ? `<div style="margin-top:6px">${esc(r.summary)}</div>` : ""}
+    ${r.report ? `<details data-report="${esc(r.report)}" ${openReports.has(r.report) ? "open" : ""} style="margin-top:6px">
+      <summary>Full review <code>${esc(r.report)}</code></summary>
+      <pre class="box" data-report-body="${esc(r.report)}">${esc(reports[r.report] ?? "loading…")}</pre></details>` : ""}
+    ${r.log ? `<div class="muted" style="margin-top:4px">log: <code>${esc(r.log)}</code></div>` : ""}` : ""}
+    ${st.pr_commit ? `<div class="muted" style="margin-top:6px">One commit on <code>${esc(st.pr_branch)}</code> · <code>${esc(st.pr_commit)}</code> ${esc(st.pr_title || "")}</div>` : ""}
+  </div>`;
 }
 
 function renderPlanner(s) {
@@ -175,7 +310,7 @@ function renderAgents(s) {
 
 function taskCard(t) {
   const model = [t.model, t.effort].filter(Boolean).join("/");
-  return `<div class="card task ${t.id === selected ? "sel" : ""}" style="--c:var(--${t.status})" data-id="${esc(t.id)}">
+  return `<div class="card task ${t.id === selected ? "sel" : ""}" style="--c:var(--${t.status})" data-id="${esc(t.id)}" tabindex="0">
     <div class="t">${esc(t.id)} · ${esc(t.title)}</div>
     <div class="meta">
       <span class="tag" style="color:var(--${t.status})">${LABEL[t.status]}</span>
@@ -191,30 +326,66 @@ function taskCard(t) {
   </div>`;
 }
 
-function renderTasks(s) {
-  const counts = {};
-  s.tasks.forEach((t) => (counts[t.status] = (counts[t.status] || 0) + 1));
-  document.getElementById("counts").textContent = Object.entries(counts).map(([k, v]) => `${v} ${LABEL[k]}`).join(" · ");
-  const proposals = s.tasks.filter((t) => t.status === "proposed" || t.status === "rejected");
-  const planned = s.tasks.filter((t) => !proposals.includes(t));
-  const stages = [...new Set(planned.map((t) => t.stage))].sort((a, b) => a - b);
-  let html = stages.map((n) => `<div class="stage"><div class="stage-head">Stage ${n}${n === 1 ? " — no dependencies" : ""}</div>
-    <div class="tasks">${planned.filter((t) => t.stage === n).map(taskCard).join("")}</div></div>`).join("");
-  if (proposals.length) html += `<div class="stage"><div class="stage-head">Proposed by agents — approve or reject</div>
-    <div class="tasks">${proposals.map(taskCard).join("")}</div></div>`;
-  document.getElementById("stages").innerHTML = html || `<div class="card muted">No tasks queued.</div>`;
-  document.querySelectorAll(".task").forEach((el) => (el.onclick = () => select(el.dataset.id)));
+function renderFilters(s) {
+  document.getElementById("filters").innerHTML = Object.entries(FILTERS).map(([k, [label, match]]) => {
+    const n = s.tasks.filter(match).length;
+    return `<button class="chip ${filter === k ? "on" : ""}" data-filter="${k}">${label}<span class="n">${n}</span></button>`;
+  }).join("");
+  document.querySelectorAll("#filters [data-filter]").forEach((b) => (b.onclick = () => {
+    filter = b.dataset.filter; setPref("filter", filter);
+    renderFilters(s); renderTasks(s);
+  }));
 }
 
+function renderTasks(s) {
+  const match = (FILTERS[filter] || FILTERS.all)[1];
+  const shown = s.tasks.filter(match);
+  const proposals = shown.filter((t) => t.status === "proposed" || t.status === "rejected");
+  const planned = shown.filter((t) => !proposals.includes(t));
+  const stages = [...new Set(planned.map((t) => t.stage))].sort((a, b) => a - b);
+  let html = stages.map((n) => {
+    const mine = planned.filter((t) => t.stage === n);
+    const head = `Stage ${n}${n === 1 ? " — no dependencies" : ""}`;
+    const cards = `<div class="tasks">${mine.map(taskCard).join("")}</div>`;
+    // A finished stage folds into one line (in the "All" view), unless you opened it or a task in it is selected.
+    if (filter === "all" && mine.every((t) => t.status === "done")) {
+      const open = openStages.has(n) || mine.some((t) => t.id === selected);
+      return `<details class="stage" data-stage="${n}" ${open ? "open" : ""}><summary>${head} · all ${mine.length} merged ✓</summary>${cards}</details>`;
+    }
+    return `<div class="stage"><div class="stage-head">${head}</div>${cards}</div>`;
+  }).join("");
+  if (proposals.length) html += `<div class="stage"><div class="stage-head">Proposed by agents — <code>make review</code> to decide</div>
+    <div class="tasks">${proposals.map(taskCard).join("")}</div></div>`;
+  document.getElementById("stages").innerHTML = html
+    || `<div class="card muted">${s.tasks.length ? `No tasks match “${FILTERS[filter][0]}”.` : "No tasks queued."}</div>`;
+  document.querySelectorAll("#stages details.stage").forEach((d) => d.addEventListener("toggle", () => {
+    const n = Number(d.dataset.stage);
+    d.open ? openStages.add(n) : openStages.delete(n);
+  }));
+  document.querySelectorAll(".task").forEach((el) => {
+    el.onclick = () => select(el.dataset.id);
+    el.onkeydown = (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); select(el.dataset.id); } };
+  });
+}
+
+const EVENT_COLORS = {
+  task_failed: "--failed", proposal_invalid: "--failed", task_done: "--done", task_passed: "--passed",
+  task_claimed: "--claimed", task_proposed: "--proposed", task_approved: "--done", task_rejected: "--muted",
+  task_requeued: "--warn",
+};
 function renderEvents(s) {
   const box = document.getElementById("events");
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 20;
-  const evs = selected ? s.events.filter((e) => e.task === selected) : s.events;
-  document.getElementById("evfilter").innerHTML = selected ? `for ${esc(selected)} · <a href="#" id="clearsel">show all</a>` : "";
+  const showTools = document.getElementById("showtools").checked;
+  const evs = s.events.filter((e) => (!selected || e.task === selected) && (showTools || e.kind !== "tool"));
+  const hiddenTools = showTools ? 0 : s.events.filter((e) => e.kind === "tool" && (!selected || e.task === selected)).length;
+  document.getElementById("evfilter").innerHTML = (selected ? `for ${esc(selected)} · <a href="#" id="clearsel">show all</a>` : "")
+    + (hiddenTools ? `${selected ? " · " : ""}${hiddenTools} tool calls hidden` : "");
   box.innerHTML = evs.map((e) => {
-    const info = e.detail || e.error || (e.cost_usd != null ? `$${e.cost_usd.toFixed(3)}, ${e.turns} turns` : "");
-    return `<div><span class="muted">${clock(e.ts)}</span> ${esc(e.kind)} <b>${esc([e.agent, e.task].filter(Boolean).join(" "))}</b> ${esc(info)}</div>`;
-  }).join("") || `<span class="muted">No events.</span>`;
+    const info = shortPaths(e.detail || e.error || (e.cost_usd != null ? `$${e.cost_usd.toFixed(3)}, ${e.turns} turns` : ""));
+    const color = EVENT_COLORS[e.kind] || (e.kind === "tool" ? "--muted" : "--text");
+    return `<div><span class="muted">${clock(e.ts)}</span> <span style="color:var(${color})">${esc(e.kind)}</span> <b>${esc([e.agent, e.task].filter(Boolean).join(" "))}</b> ${esc(info)}</div>`;
+  }).join("") || `<span class="muted">No events${hiddenTools ? " besides tool calls" : ""}.</span>`;
   if (atBottom) box.scrollTop = box.scrollHeight;
   const c = document.getElementById("clearsel");
   if (c) c.onclick = (ev) => { ev.preventDefault(); select(null); };
@@ -241,33 +412,68 @@ async function renderLog(file) {
   return out.join("") || `<span class="muted">no activity yet</span>`;
 }
 
+const ICON = {
+  prev: `<svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>`,
+  next: `<svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>`,
+  close: `<svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>`,
+};
+const cmdRow = (cmd) => `<div class="cmd"><pre>${esc(cmd)}</pre><button data-cmd="${esc(cmd)}">copy</button></div>`;
+// Task IDs in board order (stages, then proposals), for previous / next.
+const boardOrder = () => [...document.querySelectorAll("#stages .task")].map((el) => el.dataset.id);
+
+function step(delta) {
+  const ids = boardOrder(), i = ids.indexOf(selected);
+  if (i >= 0 && ids[i + delta]) select(ids[i + delta]);
+}
+
+let drawnId = null;
 async function renderDrawer() {
   const d = document.getElementById("drawer");
   const t = state?.tasks.find((x) => x.id === selected);
-  if (!t) { d.classList.remove("open"); return; }
+  if (!t) { d.classList.remove("open"); document.body.classList.remove("drawer-open"); drawnId = null; return; }
+  const opening = !d.classList.contains("open");
   d.classList.add("open");
+  document.body.classList.add("drawer-open");
   const model = [t.model, t.effort].filter(Boolean).join("/") || "default";
   const logs = t.logs || [];
   const keepOpen = [...d.querySelectorAll("details[open]")].map((x) => x.dataset.k);
+  const ids = boardOrder(), pos = ids.indexOf(t.id);
   d.innerHTML = `
-    <div class="row" style="justify-content:space-between"><h3>${esc(t.id)} · ${esc(t.title)}</h3><button id="close">close</button></div>
-    <div class="meta row" style="gap:6px">
+    <div class="head">
+      <div class="top">
+        <h3>${esc(t.id)} · ${esc(t.title)}</h3>
+        <div class="icons">
+          <button class="icon" data-step="-1" title="Previous task (←)" aria-label="Previous task" ${pos <= 0 ? "disabled" : ""}>${ICON.prev}</button>
+          <button class="icon" data-step="1" title="Next task (→)" aria-label="Next task" ${pos < 0 || pos >= ids.length - 1 ? "disabled" : ""}>${ICON.next}</button>
+          <button class="icon" id="close" title="Close (Esc)" aria-label="Close">${ICON.close}</button>
+        </div>
+      </div>
+      <div class="keys">${pos >= 0 ? `${pos + 1} of ${ids.length} · ` : ""}<kbd>←</kbd> <kbd>→</kbd> previous / next · <kbd>Esc</kbd> close</div>
+    </div>
+    <div class="body">
+    <div class="meta row" style="gap:6px;margin-top:12px">
       <span class="tag" style="color:var(--${t.status})">${LABEL[t.status]}</span><span class="tag">${esc(t.role)}</span>
       <span class="tag">${esc(model)}</span>${t.ran_as ? `<span class="tag">ran as ${esc(t.ran_as)}</span>` : ""}
       <span class="tag">stage ${t.stage}</span>${t.attempts ? `<span class="tag">attempts ${t.attempts}</span>` : ""}
       ${t.duration_s != null ? `<span class="tag">${dur(t.duration_s)}</span>` : ""}${t.cost_usd ? `<span class="tag">${money(t.cost_usd)}</span>` : ""}
     </div>
     ${t.rationale ? `<h4>Why (proposal)</h4><div>${esc(t.rationale)}</div><div class="muted">proposed by ${esc(t.proposed_by)}</div>` : ""}
-    ${t.status === "proposed" ? `<h4>Decide</h4><pre class="box">make approve IDS=${esc(t.id)}\nmake reject IDS=${esc(t.id)}</pre>` : ""}
-    ${t.status === "failed" ? `<h4>Retry</h4><pre class="box">make retry IDS=${esc(t.id)} && make run</pre>` : ""}
+    ${t.status === "proposed" ? `<h4>Decide</h4>${cmdRow("make review")}${cmdRow(`make approve IDS=${t.id}`)}${cmdRow(`make reject IDS=${t.id}`)}` : ""}
+    ${t.status === "failed" ? `<h4>Retry</h4>${cmdRow(`make retry IDS=${t.id} && make run`)}` : ""}
     ${t.error || t.failures?.length ? `<h4>Errors</h4><div class="box err"><pre>${esc(t.error || t.failures[t.failures.length - 1])}</pre></div>` : ""}
     <h4>Depends on</h4><div>${(t.depends_on || []).map((x) => `<a href="#${esc(x)}">${esc(x)}</a>`).join(", ") || "—"}</div>
     <h4>Scope (files it may change)</h4><pre class="box">${esc((t.scope || []).join("\n"))}</pre>
     <details data-k="prompt" ${keepOpen.includes("prompt") ? "open" : ""}><summary>Task prompt (${(t.prompt || "").length} chars)</summary><pre class="box">${esc(t.prompt)}</pre></details>
     <h4>Agent activity ${logs.length ? `(${logs.length} attempt${logs.length > 1 ? "s" : ""})` : ""}</h4>
     ${logs.length ? logs.slice().reverse().map((f, i) => `<details data-k="${esc(f)}" ${i === 0 || keepOpen.includes(f) ? "open" : ""}><summary>${esc(f)}</summary><div class="box log" data-log="${esc(f)}">loading…</div></details>`).join("")
-      : `<div class="muted">${t.status === "pending" ? "Not started yet." : "No agent log (dry run or not run)."}</div>`}`;
+      : `<div class="muted">${t.status === "pending" ? "Not started yet." : "No agent log (dry run or not run)."}</div>`}
+    </div>`;
   document.getElementById("close").onclick = () => select(null);
+  d.querySelectorAll("[data-step]").forEach((b) => (b.onclick = () => step(Number(b.dataset.step))));
+  d.querySelectorAll("[data-cmd]").forEach((b) => (b.onclick = () => copy(b, b.dataset.cmd)));
+  if (drawnId !== t.id) d.scrollTop = 0;  // a different task starts at the top; a refresh keeps your place
+  if (opening) d.focus({ preventScroll: true });
+  drawnId = t.id;
   for (const el of d.querySelectorAll("[data-log]")) {
     const box = el, f = el.dataset.log, atBottom = true;
     renderLog(f).then((html) => { box.innerHTML = html; if (atBottom) box.scrollTop = box.scrollHeight; });
@@ -275,12 +481,20 @@ async function renderDrawer() {
 }
 
 function select(id) {
+  const previous = selected;
   selected = id;
   history.replaceState(null, "", id ? `#${encodeURIComponent(id)}` : location.pathname);
   if (state) { renderTasks(state); renderEvents(state); }
   renderDrawer();
+  if (!id && previous) document.querySelector(`.task[data-id="${CSS.escape(previous)}"]`)?.focus({ preventScroll: true });
 }
 window.addEventListener("hashchange", () => select(decodeURIComponent(location.hash.slice(1)) || null));
+document.addEventListener("keydown", (ev) => {
+  if (!selected || ev.metaKey || ev.ctrlKey || ev.altKey || ev.target.closest?.("input, textarea, select, [contenteditable]")) return;
+  if (ev.key === "Escape") { ev.preventDefault(); select(null); }
+  else if (ev.key === "ArrowLeft") { ev.preventDefault(); step(-1); }
+  else if (ev.key === "ArrowRight") { ev.preventDefault(); step(1); }
+});
 
 // ---------------------------------------------------------------- polling
 
@@ -290,15 +504,19 @@ async function poll() {
     const res = await fetch("/.orch/state.json", { cache: "no-store" });
     if (res.ok) {
       state = await res.json();
-      renderHeader(state); renderHints(state); renderStories(state); renderPlanner(state); renderAgents(state); renderTasks(state); renderEvents(state);
+      renderHeader(state); renderHints(state); renderStories(state); renderPlanner(state); renderAgents(state);
+      renderFilters(state); renderTasks(state); renderEvents(state);
       const t = state.tasks.find((x) => x.id === selected);
       if (selected && (Date.now() - lastDrawer > 4000 || !document.getElementById("drawer").classList.contains("open"))) {
         if (!t || t.status === "claimed" || Date.now() - lastDrawer > 15000) { lastDrawer = Date.now(); renderDrawer(); }
       }
-    }
-  } catch (e) { /* server not up yet */ }
+    } else if (state) renderHeader(state);  // keep the age in the pill current; it turns into a stale warning
+  } catch (e) { renderOffline(); }
   setTimeout(poll, 1500);
 }
+const toolsBox = document.getElementById("showtools");
+toolsBox.checked = pref("showTools", false);
+toolsBox.onchange = () => { setPref("showTools", toolsBox.checked); if (state) renderEvents(state); };
 poll();
 if (selected) setTimeout(renderDrawer, 300);
 </script>

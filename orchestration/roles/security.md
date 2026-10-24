@@ -29,6 +29,8 @@ You find out how the system can be abused and make sure it's fixed. You don't bu
    }]
    ```
 
+   `depends_on` lists task IDs (e.g. `S01-03`) or the exact `title` of another proposal in the same file; the orchestrator turns titles into the new proposal IDs.
+
    Use `role: "api"` for spec changes, `backend` for code, and `security` for infrastructure fixes you couldn't make yourself. Give each fix the narrowest scope that works.
    - Set `model` to `haiku` for small, fully specified fixes, to `sonnet` when the fix needs design judgment, and to `opus` only for fixes to subtle concurrency or consistency issues. Add `"effort": "xhigh"` only if such a fix is genuinely hard.
 

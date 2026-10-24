@@ -14,7 +14,7 @@ from pathlib import Path
 
 import stories
 import tasks
-from common import AGENTS_DIR, EVENTS_FILE, LOGS_DIR, ORCH, ROOT, STATE_FILE, TOOLING, git
+from common import AGENTS_DIR, EVENTS_FILE, LOGS_DIR, ORCH, PLANS_DIR, ROOT, STATE_FILE, git
 
 RUN_FILE = ORCH / "run.json"
 
@@ -157,7 +157,7 @@ def _planner_info():
         elif m.get("type") == "result":
             result = m
     started = log.stat().st_birthtime if hasattr(log.stat(), "st_birthtime") else log.stat().st_ctime
-    plan_file = TOOLING / "plans" / f"{name}.json"
+    plan_file = PLANS_DIR / f"{name}.json"
     return {
         "name": name,
         "log": log.name,
@@ -198,13 +198,17 @@ def _stories_info(rows: list) -> list:
             "ok": rec.get("ok"),
             "checks": [{"gate": c["gate"], "ok": c["ok"], "output": c["output"][-1500:]} for c in rec.get("checks", [])],
             "review": stories.review_commands(plan) if rec.get("base") else None,
+            "lead": rec.get("review") or None,
+            "pr_branch": rec.get("pr_branch"),
+            "pr_commit": rec.get("pr_commit"),
+            "pr_title": rec.get("pr_title"),
         })
     return out
 
 
 def _plans_info(queued: set) -> list:
     out = []
-    for p in sorted((TOOLING / "plans").glob("*.json")):
+    for p in sorted(PLANS_DIR.glob("*.json")):
         try:
             ids = [t["id"] for t in json.loads(p.read_text())]
         except (json.JSONDecodeError, KeyError, TypeError):
@@ -231,9 +235,16 @@ def _hints(s: dict) -> list:
                       else "all checks passed" if st["ok"] else "checks FAILED (see the story card)")
             waiting = (f" {len(st['proposals'])} proposal(s) still wait for your decision; review the branch first, "
                        "then approve or reject them (approving reopens the branch)." if st["proposals"] else "")
-            add("ok" if st["ok"] or not st["checked"] else "warn",
-                f"Story {st['plan']} is ready on branch {st['branch']}: {st['commits']} commits, "
-                f"{st['files']} files, {checks}. Review it and push it yourself.{waiting}", st["review"])
+            lead = st["lead"] or {}
+            verdict = {"approve": " The lead engineer approved it.",
+                       "changes_requested": " The lead engineer requested changes (see the story card).",
+                       "error": " The lead review failed (see the story card)."}.get(lead.get("verdict"), "")
+            where = (f"squashed into one commit on {st['pr_branch']}" if st["pr_commit"]
+                     else f"on branch {st['branch']}")
+            good = (st["ok"] or not st["checked"]) and lead.get("verdict") in (None, "approve")
+            add("ok" if good else "warn",
+                f"Story {st['plan']} is ready, {where}: {st['commits']} task commits, "
+                f"{st['files']} files, {checks}.{verdict} Review it and push it yourself.{waiting}", st["review"])
 
     if planner and not planner["finished"] and time.time() - planner["updated"] < 120:
         add("info", f"Planner is working on {planner['name']}: {planner['tool_count']} files/commands read, "
@@ -259,15 +270,15 @@ def _hints(s: dict) -> list:
                 add("action", f"Plan {p['file']} ({p['tasks']} tasks) is not queued. Review it, commit it, then load it.",
                     f"make load PLAN={p['file']}")
         else:
-            add("action", "Nothing planned yet. Write a story (copy stories/TEMPLATE.md), then plan it.",
+            add("action", "Nothing planned yet. Write a story (copy backlog/stories/TEMPLATE.md), then plan it.",
                 "make plan STORY=<story-name>")
         return hints
 
     proposed = by("proposed")
     if proposed:
-        ids = " ".join(r["id"] for r in proposed)
-        add("action", f"{len(proposed)} follow-up task(s) proposed by agents wait for your decision "
-                      "(click them to read why).", f'make proposals   then: make approve IDS="{ids}"  or  make reject IDS="…"')
+        add("action", f"{len(proposed)} follow-up task(s) proposed by agents wait for your decision. "
+                      "Go through them one by one in the terminal (approve, reject, or chat about each).",
+            "make review")
 
     for r in by("failed"):
         first = (r.get("error") or "").strip().splitlines()[0][:200] if r.get("error") else "unknown error"
