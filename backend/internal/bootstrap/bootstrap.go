@@ -11,10 +11,18 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
+	catalogmongo "orch-test/backend/internal/catalog/adapter/mongodb"
 	"orch-test/backend/internal/handler"
 	"orch-test/backend/internal/platform/mongodb"
 	"orch-test/backend/internal/server"
 )
+
+// migrationSets lists every bounded context's migration set. Register new contexts here.
+func migrationSets() [][]mongodb.Migration {
+	return [][]mongodb.Migration{
+		catalogmongo.Migrations(),
+	}
+}
 
 // Storage selects the driven adapters for all repositories.
 type Storage string
@@ -66,6 +74,8 @@ func (a *App) Close(ctx context.Context) error {
 }
 
 // New builds the application. cmd/server and the e2e tests both use it.
+// With STORAGE=mongo it migrates the schema before returning, so cmd/server
+// only serves HTTP after the migrations finished. STORAGE=memory migrates nothing.
 //
 // Wiring a bounded context picks its repository from the configured storage:
 //
@@ -88,6 +98,10 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		}
 		app.closers = append(app.closers, client.Disconnect)
 		db = client.Database(cfg.MongoDB)
+		if err := mongodb.Migrate(ctx, db, migrationSets(), mongodb.MigrateOptions{}); err != nil {
+			_ = app.Close(ctx)
+			return nil, fmt.Errorf("migrate database schema: %w", err)
+		}
 		h.Ping = func(ctx context.Context) error { return mongodb.Ping(ctx, client) }
 	default:
 		return nil, fmt.Errorf("unknown STORAGE %q (want memory or mongo)", cfg.Storage)
