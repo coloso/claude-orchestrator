@@ -45,6 +45,8 @@ Dependency rules (enforced by `internal/archtest`):
 - Unit and e2e tests use in-memory storage. MongoDB adapter tests run only when `MONGO_TEST_URI` is set (`make test-mongo`).
   Each such test uses its own database, because parallel agents may share one server.
 
+Schema changes are migrations. Each bounded context exposes `Migrations()` in `internal/<context>/adapter/mongodb`, and `bootstrap.migrationSets()` lists them. Migrations are forward-only and numbered `<context>/<NNNN>` from 0001 with no gaps. Never edit an applied migration; fix mistakes with a new one. An `Up` step must be idempotent, because it reruns if recording fails. Use `platformmongo.EnsureCollection` and `EnsureIndexes`, and build schemas with bson.D. Use int64 for `long` fields and int for `int` fields. See docs/schema-migrations.md for the full rules and the operations guide.
+
 Other folders:
 - `frontend/` — reserved for a Vue 3 + TypeScript app (not set up yet)
 - `docs/` — Markdown documentation; `docs/security/` holds security review reports
@@ -57,6 +59,7 @@ Other folders:
 - Domain and application code is written **test-first** (red → green → refactor).
   - The gate rejects `domain`/`app` changes that come without test changes in the same package.
   - It also requires at least 80% coverage in those layers.
+- Migrations are part of a context's adapter/mongodb package and are tested with the MongoDB tests (`make test-mongo`).
 - Before finishing, run `backend/check.sh`: generate drift check, gofmt, vet, tests (including archtest), coverage, gosec and govulncheck. It must pass.
 - **Work outside your scope:** don't do it. Propose it instead.
   - Write a JSON array of follow-up tasks to `.orch-proposals.json` at the worktree root. Each entry has `title`, `role`, `prompt` and `scope`, plus optional `depends_on`, `model` (`haiku`, `sonnet` or `opus`), `effort` (`low` … `xhigh`), `severity` and `rationale`.
