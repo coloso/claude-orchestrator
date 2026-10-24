@@ -82,11 +82,14 @@ You stay in charge at three checkpoints: the **plan**, the **spec** and the **pr
    This is the cheapest moment to change your mind. Edit the spec yourself in that worktree (then `make generate` there and commit), or approve the proposed spec fixes. Later tasks start from the story branch, so they pick up your changes.
 6. **Phase 2, implementation:** `make run` runs everything else, including the HTTP adapter, MongoDB storage, e2e tests for the acceptance criteria, docs and the hardening review.
 7. **Decide on proposals:** `make review` (one by one), or `make proposals`, then `approve` or `reject`; then `make run`. Repeat until nothing important is left.
-8. **Ship:** when no task of the plan is left to run, `make run` finalizes the story:
-   - it runs all checks on the combined `story/<plan>` and releases the branch;
-   - it prints the review and push commands, which the dashboard also shows.
+8. **Lead review and one commit:** when no task of the plan is left to run, `make run` finalizes the story:
+   - it runs all checks on the combined `story/<plan>`;
+   - the **lead engineer** agent (`roles/lead.md`) reviews the whole change like a pull request: does it deliver the story, do the separately built tasks fit together, architecture, tests, docs. It changes nothing. It returns a verdict (`approve` or `changes_requested`), a report in `.orch/reviews/<plan>.md`, fix proposals for every blocking finding, and the commit message;
+   - it releases the branch and squashes the story into **one commit on `pr/<plan>`** with the lead's message. `story/<plan>` keeps the per-task history;
+   - it prints the review and push commands, which the dashboard also shows on the story card.
 
-   Then `git switch story/<plan>`, try it (`make up`), and push it or open a pull request.
+   If the lead requested changes, `make review` the proposals and `make run` again: the story reopens, and when it's done the lead reviews it again and `pr/<plan>` is rebuilt.
+9. **Ship:** read the review, `git switch pr/<plan>`, try it (`make up`), and push it or open a pull request.
 
 **Variations**
 - **Small story:** skip the spec checkpoint, `make load` and then a single `make run`.
@@ -272,7 +275,7 @@ orch-test/
 │   │   ├── tasks.py          file-based queue (atomic rename = claim)
 │   │   ├── worktrees.py      one worktree + branch per task
 │   │   └── quality_gate.py   scope check, TDD check, gate commands
-│   ├── roles/            role prompts: planner, api, backend, tests, security, docs, frontend
+│   ├── roles/            role prompts: planner, lead, api, backend, tests, security, docs, frontend
 │   └── dashboard/        live view, served by the orchestrator
 │
 ├── .orch/             runtime state (gitignored)
@@ -333,6 +336,7 @@ The orchestrator chooses the model for each agent:
 |---|---|---|
 | Planner | Claude Opus 5.5 (`claude-opus-5-5`, effort `xhigh`) | Always. One call per story, and the plan's quality decides everything after it |
 | Workers | Claude Haiku 5.5 (`claude-haiku-5-5`), Claude Sonnet 5.5 (`claude-sonnet-5-5`) or Claude Opus 5.5 (`claude-opus-5-5`) | The planner sets `"model"` (`haiku`, `sonnet`, `opus`) and `"effort"` (`low`, `medium`, `high`, `xhigh`) on every task |
+| Lead engineer | Claude Opus 5.5 (`claude-opus-5-5`, effort `high`) | `models.lead`: one review per finished story. Remove the entry to skip the review (the story is still squashed) |
 | Review chat | Claude Sonnet 5.5 (`claude-sonnet-5-5`, effort `high`) | `models.reviewer`: the `[c]hat` option in `make review`. Falls back to the planner model if unset |
 
 - **`haiku`:** mechanical, fully specified tasks, such as wiring per exact instructions, docs from code, or small fixes. It costs about a twentieth of Sonnet.
@@ -400,11 +404,12 @@ Configuration (environment): `PORT` (8000), `STORAGE` (`memory` or `mongo`), `MO
 ## Tuning
 
 - `orchestration/config.json`:
-  - `max_workers`, `max_attempts`, `agent.timeout_s`;
-  - `models`: planner model, reviewer model (review chat), worker models (aliases → IDs, optional `effort`), default, escalation, forbidden words;
+  - `max_workers`, `max_attempts`, `agent.timeout_s`, `lead.timeout_s`;
+  - `lead.allowed_tools`: the lead engineer may read and run `git diff/log/show`, nothing else;
+  - `models`: planner model, lead model (story review), reviewer model (review chat), worker models (aliases → IDs, optional `effort`), default, escalation, forbidden words;
   - `mcp_servers` and `mcp`: MCP servers and which roles get them;
   - `agent.allowed_tools`: agents run with `--permission-mode acceptEdits`, and Bash access is limited to `check.sh` and the `go`/`npm` commands listed there;
   - `require_tests_for`: the TDD rule;
   - `gates`: per-area gate commands. The `frontend` gate (`npm run typecheck && npm test`) is ready for when the Vue app exists.
-- `orchestration/roles/*.md`: role prompts, passed with `--append-system-prompt`. To add a role, create `<role>.md` and use `"role": "<role>"` in tasks.
+- `orchestration/roles/*.md`: role prompts, passed with `--append-system-prompt`. To add a role, create `<role>.md` and use `"role": "<role>"` in tasks. `planner` and `lead` are run by the orchestrator itself and can't be given tasks.
 - `CLAUDE.md`: the rules every agent reads.

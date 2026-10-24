@@ -33,8 +33,8 @@ import mcp
 import stories
 import tasks
 import worktrees
-from common import (MCP_DIR, ORCH, PLANS_DIR, ROLES_DIR, ROOT, STATUSES, STOP_FILE, STORY_FILES_DIR, WORKTREES,
-                    emit, ensure_dirs, git, load_config, model_args, tool_env)
+from common import (MCP_DIR, NON_WORKER_ROLES, ORCH, PLANS_DIR, ROLES_DIR, ROOT, STATUSES, STOP_FILE, STORY_FILES_DIR,
+                    WORKTREES, emit, ensure_dirs, git, load_config, model_args, tool_env)
 from state import record_run, write_state
 
 
@@ -63,7 +63,7 @@ def cmd_plan(source: str, out: str, prefix: str) -> None:
     if out_path.exists():
         sys.exit(f"{out_path.relative_to(ROOT)} already exists; pass --out or delete it.")
 
-    roles = sorted(p.stem for p in ROLES_DIR.glob("*.md") if p.stem != "planner")
+    roles = sorted(p.stem for p in ROLES_DIR.glob("*.md") if p.stem not in NON_WORKER_ROLES)
     prompt = (
         f"Story:\n\n{story}\n\n"
         f"Available worker roles: {', '.join(roles)}\n"
@@ -178,7 +178,7 @@ def validate_plan(plan: list, existing: set = frozenset(), config: dict = None) 
         missing = [d for d in t.get("depends_on", []) if d not in set(ids) | existing]
         if missing:
             sys.exit(f"{t['id']} depends on unknown task(s) {missing}")
-        if not (ROLES_DIR / f"{t['role']}.md").exists():
+        if t["role"] in NON_WORKER_ROLES or not (ROLES_DIR / f"{t['role']}.md").exists():
             sys.exit(f"{t['id']} has unknown role '{t['role']}'")
         if t.get("model") and t["model"] not in workers:
             sys.exit(f"{t['id']} asks for model '{t['model']}'; worker models are {sorted(workers)}")
@@ -540,7 +540,7 @@ def cmd_decide(ids: list, approve: bool) -> None:
         if approve:
             missing = [d for d in t.get("depends_on", []) if d not in known]
             models = load_config()["models"]
-            if (missing or not (ROLES_DIR / f"{t['role']}.md").exists()
+            if (missing or t["role"] in NON_WORKER_ROLES or not (ROLES_DIR / f"{t['role']}.md").exists()
                     or (t.get("model") and t["model"] not in models["workers"])
                     or (t.get("effort") and t["effort"] not in models["efforts"])):
                 print(f"{tid}: cannot approve (role '{t['role']}', model '{t.get('model')}', "

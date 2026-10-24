@@ -19,6 +19,8 @@ STATE_FILE = ORCH / "state.json"
 STOP_FILE = ORCH / "STOP"
 WORKTREES = ROOT / ".worktrees"
 ROLES_DIR = TOOLING / "roles"
+# Roles the orchestrator runs itself; they never get tasks from a plan or a proposal.
+NON_WORKER_ROLES = ("planner", "lead")
 
 # Human-written input, kept out of the tooling: stories, and the plans the planner makes from them.
 BACKLOG = ROOT / "backlog"
@@ -35,7 +37,7 @@ PROPOSALS_FILE = ".orch-proposals.json"
 def load_config() -> dict:
     config = json.loads((TOOLING / "config.json").read_text())
     models = config["models"]
-    single = [models["planner"], *([models["reviewer"]] if "reviewer" in models else [])]
+    single = [models["planner"], *(models[k] for k in ("reviewer", "lead") if k in models)]
     ids = [m["id"] for m in single] + [w["id"] for w in models["workers"].values()]
     banned = [i for i in ids for word in models.get("forbidden", []) if word in i.lower()]
     if banned:

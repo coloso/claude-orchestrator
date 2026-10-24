@@ -240,10 +240,49 @@ function renderStories(s) {
       <div class="row"><b>${esc(st.plan)}</b><code>${esc(st.branch)}</code><span class="muted">${label}</span>
         <span class="muted">${st.done}/${st.tasks} tasks merged${st.complete ? ` · ${st.commits} commits · ${st.files} files` : ""}${st.base ? ` · from ${esc(st.base)}` : ""}${st.proposals?.length ? ` · ${st.proposals.length} proposal(s) waiting` : ""}</span></div>
       ${failed.map((c) => `<details open><summary>${esc(c.gate)} gate failed</summary><pre class="box err">${esc(c.output)}</pre></details>`).join("")}
+      ${leadBlock(st)}
       ${st.review ? `<div class="cmd"><pre>${esc(st.review)}</pre><button data-story="${i}">copy</button></div>` : ""}
     </div>`;
   }).join("");
   document.querySelectorAll("#stories [data-story]").forEach((b) => (b.onclick = () => copy(b, list[b.dataset.story].review)));
+  document.querySelectorAll("#stories details[data-report]").forEach((d) => d.addEventListener("toggle", () => {
+    const f = d.dataset.report;
+    d.open ? openReports.add(f) : openReports.delete(f);
+    if (d.open) loadReport(f);
+  }));
+}
+
+const LEAD = {
+  approve: ["--ok", "approved"],
+  changes_requested: ["--warn", "changes requested"],
+  error: ["--failed", "review failed"],
+};
+const openReports = new Set(), reports = {};
+async function loadReport(file) {
+  try {
+    const res = await fetch(`/${file}`, { cache: "no-store" });
+    reports[file] = res.ok ? await res.text() : "Report not available.";
+  } catch { reports[file] = "Report not available."; }
+  document.querySelectorAll(`#stories pre[data-report-body="${CSS.escape(file)}"]`).forEach((p) => (p.textContent = reports[file]));
+}
+
+function leadBlock(st) {
+  const r = st.lead;
+  if (!r?.verdict && !st.pr_commit) return "";
+  const [color, label] = LEAD[r?.verdict] || ["--info", "not reviewed"];
+  return `<div style="margin-top:8px">
+    ${r?.verdict ? `<div class="row" style="gap:8px">
+      <span class="pill"><span class="dot" style="background:var(${color})"></span>Lead engineer: ${label}</span>
+      ${r.proposals?.length ? `<span class="muted">${r.proposals.length} fix(es) proposed: ${r.proposals.map((id) => `<a href="#${esc(id)}">${esc(id)}</a>`).join(", ")}</span>` : ""}
+      ${r.cost_usd ? `<span class="muted">${money(r.cost_usd)}</span>` : ""}
+    </div>
+    ${r.summary ? `<div style="margin-top:6px">${esc(r.summary)}</div>` : ""}
+    ${r.report ? `<details data-report="${esc(r.report)}" ${openReports.has(r.report) ? "open" : ""} style="margin-top:6px">
+      <summary>Full review <code>${esc(r.report)}</code></summary>
+      <pre class="box" data-report-body="${esc(r.report)}">${esc(reports[r.report] ?? "loading…")}</pre></details>` : ""}
+    ${r.log ? `<div class="muted" style="margin-top:4px">log: <code>${esc(r.log)}</code></div>` : ""}` : ""}
+    ${st.pr_commit ? `<div class="muted" style="margin-top:6px">One commit on <code>${esc(st.pr_branch)}</code> · <code>${esc(st.pr_commit)}</code> ${esc(st.pr_title || "")}</div>` : ""}
+  </div>`;
 }
 
 function renderPlanner(s) {

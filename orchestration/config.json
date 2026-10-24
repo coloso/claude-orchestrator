@@ -7,6 +7,7 @@
   "models": {
     "planner": { "id": "claude-opus-5-5", "effort": "xhigh" },
     "reviewer": { "id": "claude-sonnet-5-5", "effort": "high" },
+    "lead": { "id": "claude-opus-5-5", "effort": "high" },
     "workers": {
       "opus":   { "id": "claude-opus-5-5", "effort": "high" },
       "sonnet": { "id": "claude-sonnet-5-5", "effort": "high" },
@@ -34,6 +35,11 @@
   "planner": {
     "timeout_s": 1200,
     "allowed_tools": ["Read", "Glob", "Grep"]
+  },
+
+  "lead": {
+    "timeout_s": 1800,
+    "allowed_tools": ["Read", "Glob", "Grep", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)"]
   },
 
   "mcp_servers": {
@@ -64,7 +70,8 @@
     "api": ["context7"],
     "backend": ["gopls", "context7", "mongodb"],
     "tests": ["gopls"],
-    "security": ["gopls", "mongodb"]
+    "security": ["gopls", "mongodb"],
+    "lead": ["gopls"]
   },
 
   "require_tests_for": ["backend/internal/*/domain/*.go", "backend/internal/*/app/*.go"],

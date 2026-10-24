@@ -198,6 +198,10 @@ def _stories_info(rows: list) -> list:
             "ok": rec.get("ok"),
             "checks": [{"gate": c["gate"], "ok": c["ok"], "output": c["output"][-1500:]} for c in rec.get("checks", [])],
             "review": stories.review_commands(plan) if rec.get("base") else None,
+            "lead": rec.get("review") or None,
+            "pr_branch": rec.get("pr_branch"),
+            "pr_commit": rec.get("pr_commit"),
+            "pr_title": rec.get("pr_title"),
         })
     return out
 
@@ -231,9 +235,16 @@ def _hints(s: dict) -> list:
                       else "all checks passed" if st["ok"] else "checks FAILED (see the story card)")
             waiting = (f" {len(st['proposals'])} proposal(s) still wait for your decision; review the branch first, "
                        "then approve or reject them (approving reopens the branch)." if st["proposals"] else "")
-            add("ok" if st["ok"] or not st["checked"] else "warn",
-                f"Story {st['plan']} is ready on branch {st['branch']}: {st['commits']} commits, "
-                f"{st['files']} files, {checks}. Review it and push it yourself.{waiting}", st["review"])
+            lead = st["lead"] or {}
+            verdict = {"approve": " The lead engineer approved it.",
+                       "changes_requested": " The lead engineer requested changes (see the story card).",
+                       "error": " The lead review failed (see the story card)."}.get(lead.get("verdict"), "")
+            where = (f"squashed into one commit on {st['pr_branch']}" if st["pr_commit"]
+                     else f"on branch {st['branch']}")
+            good = (st["ok"] or not st["checked"]) and lead.get("verdict") in (None, "approve")
+            add("ok" if good else "warn",
+                f"Story {st['plan']} is ready, {where}: {st['commits']} task commits, "
+                f"{st['files']} files, {checks}.{verdict} Review it and push it yourself.{waiting}", st["review"])
 
     if planner and not planner["finished"] and time.time() - planner["updated"] < 120:
         add("info", f"Planner is working on {planner['name']}: {planner['tool_count']} files/commands read, "
