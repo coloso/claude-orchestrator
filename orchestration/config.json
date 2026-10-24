@@ -1,0 +1,30 @@
+{
+  "max_workers": 4,
+  "max_attempts": 2,
+  "poll_interval_s": 2,
+  "dashboard_port": 8765,
+
+  "agent": {
+    "model": "sonnet",
+    "timeout_s": 900,
+    "permission_mode": "acceptEdits",
+    "allowed_tools": [
+      "Read", "Glob", "Grep", "Edit", "Write",
+      "Bash(backend/check.sh:*)", "Bash(./check.sh:*)", "Bash(cd:*)",
+      "Bash(go generate:*)", "Bash(go tool ogen:*)",
+      "Bash(go test:*)", "Bash(go vet:*)", "Bash(go build:*)", "Bash(gofmt:*)",
+      "Bash(npm test:*)", "Bash(npm run typecheck:*)",
+      "Bash(ls:*)", "Bash(cat:*)"
+    ]
+  },
+
+  "planner": {
+    "model": "sonnet",
+    "allowed_tools": ["Read", "Glob", "Grep"]
+  },
+
+  "gates": [
+    { "name": "backend",  "paths": ["backend/**"],  "cwd": "backend",  "cmd": "./check.sh" },
+    { "name": "frontend", "paths": ["frontend/**"], "cwd": "frontend", "cmd": "npm run typecheck && npm test" }
+  ]
+}

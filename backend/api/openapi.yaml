@@ -1,0 +1,40 @@
+openapi: 3.0.3
+info:
+  title: orch-test API
+  version: 0.1.0
+paths:
+  /api/health:
+    get:
+      operationId: getHealth
+      summary: Liveness check
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        default:
+          $ref: "#/components/responses/Error"
+components:
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: ok
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+  responses:
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

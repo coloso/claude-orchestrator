@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Orchestra</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6b7280; --border: #e3e6eb;
+    --pending: #9ca3af; --claimed: #2563eb; --passed: #7c3aed; --done: #16a34a; --failed: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1218; --panel: #171b23; --text: #e5e7eb; --muted: #9ca3af; --border: #2a303b; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px 16px; font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  h1 { font-size: 18px; margin: 0; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 24px 0 8px; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: baseline; }
+  .muted { color: var(--muted); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+  .card b { display: block; overflow-wrap: anywhere; }
+  .board { display: grid; gap: 10px; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  @media (max-width: 800px) { .board { grid-template-columns: 1fr; } }
+  .col { display: flex; flex-direction: column; gap: 8px; }
+  .col h3 { font-size: 13px; margin: 0; display: flex; align-items: center; }
+  .task { border-left: 3px solid var(--c); }
+  .task .err { color: var(--failed); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 6em; overflow: hidden; }
+  .tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--bg); border: 1px solid var(--border); }
+  #events { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; font: 12px/1.6 ui-monospace, monospace; padding: 8px 12px; max-height: 340px; overflow: auto; }
+  #events div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Agent Orchestra</h1>
+  <span id="run" class="muted">waiting for .orch/state.json…</span>
+  <span id="cost" class="muted"></span>
+</header>
+
+<h2>Agents</h2>
+<div id="agents" class="grid"></div>
+
+<h2>Tasks</h2>
+<div id="board" class="board"></div>
+
+<h2>Events</h2>
+<div id="events"></div>
+
+<script>
+const STATUSES = ["pending", "claimed", "passed", "done", "failed"];
+const LABELS = { pending: "Pending", claimed: "In progress", passed: "Passed gate", done: "Merged", failed: "Failed" };
+const AGENT_COLOR = { idle: "--pending", working: "--claimed", gating: "--passed", stopped: "--muted" };
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const time = (ts) => new Date(ts * 1000).toLocaleTimeString();
+
+function render(s) {
+  const done = s.tasks.filter((t) => t.status === "done").length;
+  document.getElementById("run").textContent =
+    `${s.running ? "running" : "stopped"} · ${done}/${s.tasks.length} merged · updated ${time(s.updated)}`;
+  document.getElementById("cost").textContent = s.cost_usd ? `$${s.cost_usd.toFixed(2)}` : "";
+
+  document.getElementById("agents").innerHTML = s.agents.map((a) => `
+    <div class="card">
+      <b><span class="dot" style="background:var(${AGENT_COLOR[a.status] || "--muted"})"></span>${esc(a.id)}</b>
+      <span class="muted">${esc(a.status)}${a.task ? ` · ${esc(a.task)} (${esc(a.role)})` : ""}</span>
+    </div>`).join("") || `<span class="muted">no agents yet</span>`;
+
+  document.getElementById("board").innerHTML = STATUSES.map((st) => {
+    const items = s.tasks.filter((t) => t.status === st);
+    return `<div class="col">
+      <h3><span class="dot" style="background:var(--${st})"></span>${LABELS[st]} <span class="muted">&nbsp;${items.length}</span></h3>
+      ${items.map((t) => `
+        <div class="card task" style="--c:var(--${st})">
+          <b>${esc(t.id)} · ${esc(t.title)}</b>
+          <span class="tag">${esc(t.role)}</span>
+          ${t.agent ? `<span class="tag">${esc(t.agent)}</span>` : ""}
+          ${t.attempts > 1 ? `<span class="tag">attempt ${t.attempts}</span>` : ""}
+          ${t.depends_on?.length ? `<div class="muted">after ${t.depends_on.map(esc).join(", ")}</div>` : ""}
+          ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}
+        </div>`).join("")}
+    </div>`;
+  }).join("");
+
+  const box = document.getElementById("events");
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 20;
+  box.innerHTML = s.events.map((e) => {
+    const who = [e.agent, e.task].filter(Boolean).join(" ");
+    const info = e.detail || e.error || (e.cost_usd != null ? `$${e.cost_usd.toFixed(3)}, ${e.turns} turns` : "");
+    return `<div><span class="muted">${time(e.ts)}</span> ${esc(e.kind)} <b style="display:inline">${esc(who)}</b> ${esc(info)}</div>`;
+  }).join("");
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+async function poll() {
+  try {
+    const res = await fetch("/.orch/state.json", { cache: "no-store" });
+    if (res.ok) render(await res.json());
+  } catch (e) { /* orchestrator not running yet */ }
+  setTimeout(poll, 1000);
+}
+poll();
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+# Orchestration runtime state
+.orch/
+.worktrees/
+
+# Orchestrator (Python stdlib only)
+__pycache__/
+
+# Go
+backend/bin/
+
+# Node (no trailing slash: worktrees symlink node_modules, and a symlink is not a directory)
+node_modules
+dist/
+
+# IDE / OS
+.idea/
+.DS_Store

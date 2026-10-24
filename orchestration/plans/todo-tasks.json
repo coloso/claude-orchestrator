@@ -1,0 +1,50 @@
+[
+  {
+    "id": "T-001",
+    "role": "api",
+    "title": "Todo API spec",
+    "prompt": "Add the todo endpoints to backend/api/openapi.yaml and regenerate internal/oas.\n\nSchemas:\n- Todo: {id: integer int64, title: string, done: boolean}, all required\n- TodoCreate: {title: string, minLength 1, maxLength 200}, required\n- TodoUpdate: {title?: string (minLength 1, maxLength 200), done?: boolean}\n\nOperations (success response + the shared default Error response only; list error statuses in each description):\n- listTodos   GET    /api/todos          -> 200 array of Todo\n- createTodo  POST   /api/todos          body TodoCreate -> 201 Todo\n- getTodo     GET    /api/todos/{id}     -> 200 Todo (404 if unknown)\n- updateTodo  PATCH  /api/todos/{id}     body TodoUpdate -> 200 Todo (404 if unknown)\n- deleteTodo  DELETE /api/todos/{id}     -> 204 (404 if unknown)",
+    "scope": ["backend/api/**", "backend/internal/oas/**"],
+    "depends_on": []
+  },
+  {
+    "id": "T-002",
+    "role": "backend",
+    "title": "Logging and CORS middleware",
+    "prompt": "Create package middleware in backend/internal/middleware with:\n- func Logger(next http.Handler) http.Handler: logs method, path, status and duration via log/slog (wrap ResponseWriter to capture status).\n- func CORS(allowedOrigin string) func(http.Handler) http.Handler: sets Access-Control-Allow-Origin/Methods/Headers and answers OPTIONS preflight with 204.\n- func Chain(h http.Handler, mws ...func(http.Handler) http.Handler) http.Handler, first = outermost.\nInclude unit tests. Do NOT wire it into the server; another task does that.",
+    "scope": ["backend/internal/middleware/**"],
+    "depends_on": []
+  },
+  {
+    "id": "T-003",
+    "role": "backend",
+    "title": "Implement todo operations",
+    "prompt": "Implement listTodos, createTodo, getTodo, updateTodo and deleteTodo from the generated oas.Handler in a new package backend/internal/todos (type Service, func New() *Service, thread-safe in-memory store, IDs start at 1). Title is trimmed; reject whitespace-only titles with apperr.BadRequest. Unknown IDs -> apperr.NotFound. listTodos returns an empty slice, not nil.\n\nCopy the exact method signatures from internal/oas/oas_server_gen.go. Embed *todos.Service in handler.Handler and construct it in handler.New(). Add focused unit tests for the service.",
+    "scope": ["backend/internal/todos/**", "backend/internal/handler/**"],
+    "depends_on": ["T-001"]
+  },
+  {
+    "id": "T-004",
+    "role": "backend",
+    "title": "Wire middleware into the server",
+    "prompt": "In backend/internal/server/server.go, wrap the ogen server with middleware.Chain(srv, middleware.Logger, middleware.CORS(origin)), where origin comes from the CORS_ORIGIN env var (default http://localhost:5173). Keep server.New()'s signature. Add a test in server_test.go that an OPTIONS preflight on /api/health returns 204 with the CORS headers, and keep TestHealth passing.",
+    "scope": ["backend/internal/server/**"],
+    "depends_on": ["T-002"]
+  },
+  {
+    "id": "T-005",
+    "role": "tests",
+    "title": "End-to-end todo API tests",
+    "prompt": "Write backend/e2e/todos_test.go (package e2e_test) using server.New() + httptest + the generated oas.Client: full CRUD flow, list starts empty, validation errors (empty, whitespace-only, 201-char title -> 400), 404 for get/update/delete of unknown IDs, and that the error body matches {\"error\": string}. Use raw net/http requests for malformed JSON.",
+    "scope": ["backend/e2e/**"],
+    "depends_on": ["T-003"]
+  },
+  {
+    "id": "T-006",
+    "role": "docs",
+    "title": "Backend API documentation",
+    "prompt": "Write docs/backend.md: how to run the server (go run ./cmd/server, PORT and CORS_ORIGIN), every endpoint with curl examples and responses (use api/openapi.yaml as the reference), the error format, the middleware, and the spec -> go generate -> implement workflow.",
+    "scope": ["docs/**"],
+    "depends_on": ["T-003", "T-004"]
+  }
+]
