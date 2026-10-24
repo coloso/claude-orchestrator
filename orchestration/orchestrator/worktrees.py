@@ -20,7 +20,7 @@ def create(task_id: str, base: str) -> Path:
     remove(task_id)
     wt = path_for(task_id)
     git("worktree", "add", "-b", branch_for(task_id), str(wt), base)
-    _link_shared_deps(wt)
+    link_shared_deps(wt)
     return wt
 
 
@@ -48,7 +48,7 @@ def changed_files(task_id: str, base: str) -> list:
     return [line for line in out.splitlines() if line]
 
 
-def _link_shared_deps(wt: Path) -> None:
+def link_shared_deps(wt: Path) -> None:
     # node_modules is gitignored, so share the main checkout's install instead of reinstalling.
     src = ROOT / "frontend" / "node_modules"
     dst = wt / "frontend" / "node_modules"

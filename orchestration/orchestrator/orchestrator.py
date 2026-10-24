@@ -27,6 +27,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import mcp
+import stories
 import tasks
 import worktrees
 from state import record_run, write_state
@@ -157,7 +158,10 @@ def story_prefix(name: str) -> str:
 
 def cmd_load(file: str) -> None:
     ensure_dirs()
-    load_plan(json.loads((ROOT / file).read_text()))
+    plan = json.loads((ROOT / file).read_text())
+    for t in plan:  # tasks of one plan are merged into one story branch: story/<plan file name>
+        t.setdefault("plan", Path(file).stem)
+    load_plan(plan)
 
 
 def validate_plan(plan: list, existing: set = frozenset(), config: dict = None) -> None:
@@ -206,6 +210,8 @@ def cmd_run(n_workers: int, fake: bool, only: list) -> None:
     config = load_config()
     ensure_dirs()
     config["base_branch"] = preflight()
+    for plan in sorted(stories.open_plans()):
+        stories.ensure(plan, config["base_branch"])
     if not fake:
         mcp.prepare(config)
     if only:
@@ -225,18 +231,21 @@ def cmd_run(n_workers: int, fake: bool, only: list) -> None:
 
     workers = []
     for i in range(1, n_workers + 1):
-        cmd = [sys.executable, str(Path(__file__).with_name("worker.py")),
-               "--id", f"agent-{i}", "--base", config["base_branch"]]
+        cmd = [sys.executable, str(Path(__file__).with_name("worker.py")), "--id", f"agent-{i}"]
         cmd += ["--fake"] if fake else []
         cmd += ["--only", ",".join(only)] if only else []
         workers.append(subprocess.Popen(cmd, cwd=ROOT))
     emit("run_start", workers=n_workers, fake=fake)
-    print(f"Started {n_workers} worker(s) on '{config['base_branch']}'"
-          f"{' in --fake mode' if fake else ''}{' for ' + ', '.join(only) if only else ''}. Ctrl-C to stop.")
+    branches = ", ".join(stories.branch(p) for p in sorted(stories.open_plans()))
+    print(f"Started {n_workers} worker(s){' in --fake mode' if fake else ''}"
+          f"{' for ' + ', '.join(only) if only else ''}. Merging into {branches or 'story branches'} "
+          f"(based on '{config['base_branch']}'); your checkout is not touched. Ctrl-C to stop.")
 
     idle_ticks = 0
     try:
         while True:
+            for plan in stories.open_plans():  # e.g. proposals approved while running
+                stories.ensure(plan, config["base_branch"])
             merge_passed(config)
             requeue_failed(config)
             write_state()
@@ -254,9 +263,14 @@ def cmd_run(n_workers: int, fake: bool, only: list) -> None:
             except subprocess.TimeoutExpired:
                 w.terminate()
         emit("run_stop")
+        completed = stories.completable_plans()
+        for plan in completed:
+            stories.finalize(plan, config, run_checks=not fake)
         record_run(finished=time.time())
         write_state()
     print_status()
+    for plan in completed:
+        stories.print_summary(plan)
     waiting = tasks.list_tasks("proposed")
     if waiting:
         print(f"\n{len(waiting)} proposed follow-up task(s) need your decision: "
@@ -264,28 +278,29 @@ def cmd_run(n_workers: int, fake: bool, only: list) -> None:
 
 
 def preflight() -> str:
-    """Returns the current branch: worktrees start from it and finished tasks merge into it."""
-    if git("status", "--porcelain").stdout.strip():
-        sys.exit("Working tree has uncommitted changes; commit or stash them so branches can be merged.")
+    """Returns the current branch: new story branches start from its last commit."""
     branch = git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
-    if branch.startswith("agent/") or branch == "HEAD":
-        sys.exit(f"Check out a normal branch first (currently on '{branch}').")
+    if branch.startswith(("agent/", "story/")) or branch == "HEAD":
+        sys.exit(f"Switch back to your normal branch first (currently on '{branch}'): "
+                 "story branches are checked out in their own worktree while agents work on them.")
+    if git("status", "--porcelain").stdout.strip():
+        print("Note: you have uncommitted changes. That's fine; agents start from your last commit, "
+              "so those changes are not part of the story branch.")
     return branch
 
 
 def merge_passed(config: dict) -> None:
-    """Merge passing branches into the base branch one at a time."""
+    """Merge passing branches into their story branch, one at a time."""
     for t in tasks.list_tasks("passed"):
         tid = t["id"]
-        branch = worktrees.branch_for(tid)
-        result = git("merge", "--no-ff", "-m", f"Merge {tid}: {t['title']}", branch, check=False)
-        if result.returncode != 0:
-            git("merge", "--abort", check=False)
-            tasks.move(tid, "passed", "failed", error=f"merge conflict:\n{result.stdout[-800:]}")
+        ok, output = stories.merge(t, config["base_branch"])
+        if not ok:
+            tasks.move(tid, "passed", "failed", error=f"merge conflict:\n{output}")
             emit("task_failed", task=tid, agent=t.get("agent"), error="merge conflict")
             continue
         # Log before moving: once the task is in done/, workers can claim its dependents.
-        emit("task_done", task=tid, agent=t.get("agent"), detail=f"merged {branch}")
+        emit("task_done", task=tid, agent=t.get("agent"),
+             detail=f"merged into {stories.branch(stories.plan_of(t))}")
         tasks.move(tid, "passed", "done")
         worktrees.remove(tid)
         print(f"  merged {tid}: {t['title']}")
@@ -435,7 +450,8 @@ def cmd_reset() -> None:
     shutil.rmtree(WORKTREES, ignore_errors=True)
     git("worktree", "prune", check=False)
     shutil.rmtree(ORCH, ignore_errors=True)
-    print("Removed .orch/, .worktrees/ and agent/* branches. Merged commits on main are kept.")
+    print("Removed .orch/, .worktrees/ and agent/* branches. story/* branches (your results) are kept; "
+          "delete one with: git branch -D story/<plan>")
 
 
 def main() -> None:

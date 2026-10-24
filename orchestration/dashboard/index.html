@@ -57,6 +57,7 @@
   #drawer.open { transform: none; }
   #drawer h3 { margin: 0 0 4px; font-size: 16px; }
   #drawer h4 { margin: 16px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .box { background: var(--code); border-radius: 6px; padding: 8px; max-height: 360px; overflow: auto; }
   #drawer .box { background: var(--code); border-radius: 6px; padding: 8px; max-height: 360px; overflow: auto; }
   .log div { padding: 2px 0; border-bottom: 1px dashed var(--border); overflow-wrap: anywhere; }
   .err { color: var(--failed); }
@@ -73,6 +74,11 @@
 
   <h2>What now?</h2>
   <div id="hints" class="hints"><div class="card muted">Waiting for <code>.orch/state.json</code>. Is <code>make dashboard</code> or <code>make run</code> running?</div></div>
+
+  <div id="stories-section" hidden>
+    <h2>Stories <span class="muted" style="text-transform:none;letter-spacing:0">each plan is merged into its own branch, never into your checkout</span></h2>
+    <div id="stories" class="hints"></div>
+  </div>
 
   <div id="planner-section" hidden>
     <h2>Planner</h2>
@@ -124,6 +130,24 @@ function renderHints(s) {
       ${h.cmd ? `<div class="cmd"><pre>${esc(h.cmd)}</pre><button data-copy="${i}">copy</button></div>` : ""}
     </div>`).join("") || `<div class="card muted">Nothing to do.</div>`;
   document.querySelectorAll("#hints [data-copy]").forEach((b) => (b.onclick = () => copy(b, s.hints[b.dataset.copy].cmd)));
+}
+
+function renderStories(s) {
+  const list = s.stories || [];
+  document.getElementById("stories-section").hidden = !list.length;
+  document.getElementById("stories").innerHTML = list.map((st, i) => {
+    const [color, label] = st.complete
+      ? (!st.checked ? ["--info", "complete · checks skipped (dry run)"] : st.ok ? ["--ok", "complete · all checks passed"] : ["--failed", "complete · checks FAILED"])
+      : st.integrating ? ["--claimed", "in progress"] : ["--pending", "not started"];
+    const failed = (st.checks || []).filter((c) => !c.ok);
+    return `<div class="card hint" style="--c:var(${color})">
+      <div class="row"><b>${esc(st.plan)}</b><code>${esc(st.branch)}</code><span class="muted">${label}</span>
+        <span class="muted">${st.done}/${st.tasks} tasks merged${st.complete ? ` · ${st.commits} commits · ${st.files} files` : ""}${st.base ? ` · from ${esc(st.base)}` : ""}${st.proposals?.length ? ` · ${st.proposals.length} proposal(s) waiting` : ""}</span></div>
+      ${failed.map((c) => `<details open><summary>${esc(c.gate)} gate failed</summary><pre class="box err">${esc(c.output)}</pre></details>`).join("")}
+      ${st.review ? `<div class="cmd"><pre>${esc(st.review)}</pre><button data-story="${i}">copy</button></div>` : ""}
+    </div>`;
+  }).join("");
+  document.querySelectorAll("#stories [data-story]").forEach((b) => (b.onclick = () => copy(b, list[b.dataset.story].review)));
 }
 
 function renderPlanner(s) {
@@ -266,7 +290,7 @@ async function poll() {
     const res = await fetch("/.orch/state.json", { cache: "no-store" });
     if (res.ok) {
       state = await res.json();
-      renderHeader(state); renderHints(state); renderPlanner(state); renderAgents(state); renderTasks(state); renderEvents(state);
+      renderHeader(state); renderHints(state); renderStories(state); renderPlanner(state); renderAgents(state); renderTasks(state); renderEvents(state);
       const t = state.tasks.find((x) => x.id === selected);
       if (selected && (Date.now() - lastDrawer > 4000 || !document.getElementById("drawer").classList.contains("open"))) {
         if (!t || t.status === "claimed" || Date.now() - lastDrawer > 15000) { lastDrawer = Date.now(); renderDrawer(); }

@@ -1,6 +1,6 @@
 """Worker loop: claim a task -> run a Claude agent in its worktree -> commit -> quality gate.
 
-Started by orchestrator.py: python3 orchestration/orchestrator/worker.py --id agent-1 --base main [--fake]
+Started by orchestrator.py: python3 orchestration/orchestrator/worker.py --id agent-1 [--fake] [--only IDS]
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from pathlib import Path
 
 import mcp
 import quality_gate
+import stories
 import tasks
 import worktrees
 from common import (AGENTS_DIR, LOGS_DIR, MCP_DIR, PROPOSALS_FILE, ROLES_DIR, STOP_FILE, emit, load_config,
@@ -20,12 +21,11 @@ from common import (AGENTS_DIR, LOGS_DIR, MCP_DIR, PROPOSALS_FILE, ROLES_DIR, ST
 
 
 class Worker:
-    def __init__(self, agent_id: str, base: str, fake: bool, only: list = None):
+    def __init__(self, agent_id: str, fake: bool, only: list = None):
         self.id = agent_id
         self.fake = fake
         self.only = set(only or [])
         self.config = load_config()
-        self.config["base_branch"] = base
 
     def heartbeat(self, status: str, task: dict = None) -> None:
         (AGENTS_DIR / f"{self.id}.json").write_text(json.dumps({
@@ -52,6 +52,8 @@ class Worker:
         emit("task_claimed", agent=self.id, task=tid, attempt=task["attempts"])
         self.heartbeat("working", task)
         try:
+            # Tasks start from (and are later merged into) their plan's story branch.
+            self.config["base_branch"] = stories.branch(stories.plan_of(task))
             wt = worktrees.create(tid, self.config["base_branch"])
             if self.fake:
                 self.fake_agent(task, wt)
@@ -178,11 +180,10 @@ class Worker:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--id", required=True)
-    ap.add_argument("--base", required=True, help="branch to start worktrees from")
     ap.add_argument("--fake", action="store_true", help="don't call Claude; write placeholder files")
     ap.add_argument("--only", default="", help="comma-separated task IDs this worker may claim")
     args = ap.parse_args()
-    Worker(args.id, args.base, args.fake, [t for t in args.only.split(",") if t]).loop()
+    Worker(args.id, args.fake, [t for t in args.only.split(",") if t]).loop()
 
 
 if __name__ == "__main__":

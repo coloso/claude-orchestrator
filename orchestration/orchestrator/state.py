@@ -12,6 +12,7 @@ import socket
 import time
 from pathlib import Path
 
+import stories
 import tasks
 from common import AGENTS_DIR, EVENTS_FILE, LOGS_DIR, ORCH, ROOT, STATE_FILE, TOOLING, git
 
@@ -49,6 +50,7 @@ def write_state() -> None:
         "agents": agents,
         "planner": _planner_info(),
         "plans": _plans_info(set(queue)),
+        "stories": _stories_info(rows),
         "events": events[-150:],
     }
     state["hints"] = _hints(state)
@@ -105,7 +107,7 @@ def _task_row(tid: str, status: str, t: dict, events: list) -> dict:
     started = claimed[-1] if claimed else None
     finished = done[-1] if done else None
     return {
-        **{k: t.get(k) for k in ("id", "title", "role", "model", "effort", "depends_on", "scope", "agent",
+        **{k: t.get(k) for k in ("id", "plan", "title", "role", "model", "effort", "depends_on", "scope", "agent",
                                  "attempts", "error", "severity", "proposed_by", "rationale", "prompt")},
         "status": status,
         "started": started,
@@ -171,6 +173,35 @@ def _planner_info():
     }
 
 
+def _stories_info(rows: list) -> list:
+    """One entry per plan: its story branch, progress, and (once complete) the final check."""
+    plans = sorted({stories.plan_of(r) for r in rows} | {p.stem for p in stories.STORIES_DIR.glob("*.json")})
+    out = []
+    for plan in plans:
+        mine = [r for r in rows if stories.plan_of(r) == plan]
+        rec = stories.info(plan)
+        open_ = [r for r in mine if r["status"] in stories.ACTIVE]
+        waiting = [r["id"] for r in mine if r["status"] == "proposed"]
+        out.append({
+            "plan": plan,
+            "branch": stories.branch(plan),
+            "base": rec.get("base"),
+            "tasks": len(mine),
+            "done": sum(1 for r in mine if r["status"] == "done"),
+            "open": len(open_),
+            "proposals": waiting,
+            "complete": bool(rec.get("completed_at")) and not open_,
+            "integrating": stories.worktree_path(plan).exists(),
+            "commits": rec.get("commits"),
+            "files": rec.get("files"),
+            "checked": rec.get("checked", True),
+            "ok": rec.get("ok"),
+            "checks": [{"gate": c["gate"], "ok": c["ok"], "output": c["output"][-1500:]} for c in rec.get("checks", [])],
+            "review": stories.review_commands(plan) if rec.get("base") else None,
+        })
+    return out
+
+
 def _plans_info(queued: set) -> list:
     out = []
     for p in sorted((TOOLING / "plans").glob("*.json")):
@@ -193,6 +224,16 @@ def _hints(s: dict) -> list:
     rows, run, planner = s["tasks"], s["run"], s["planner"]
     by = lambda st: [r for r in rows if r["status"] == st]
     done_ids = {r["id"] for r in by("done")}
+
+    for st in s["stories"]:
+        if st["complete"]:
+            checks = ("checks skipped (dry run)" if not st["checked"]
+                      else "all checks passed" if st["ok"] else "checks FAILED (see the story card)")
+            waiting = (f" {len(st['proposals'])} proposal(s) still wait for your decision; review the branch first, "
+                       "then approve or reject them (approving reopens the branch)." if st["proposals"] else "")
+            add("ok" if st["ok"] or not st["checked"] else "warn",
+                f"Story {st['plan']} is ready on branch {st['branch']}: {st['commits']} commits, "
+                f"{st['files']} files, {checks}. Review it and push it yourself.{waiting}", st["review"])
 
     if planner and not planner["finished"] and time.time() - planner["updated"] < 120:
         add("info", f"Planner is working on {planner['name']}: {planner['tool_count']} files/commands read, "
@@ -239,9 +280,9 @@ def _hints(s: dict) -> list:
     pending = by("pending")
     ready = [r for r in pending if set(r.get("depends_on") or []) <= done_ids]
     if pending and not run["active"]:
-        if s["git"]["dirty"]:
-            add("warn", f"Uncommitted changes ({len(s['git']['dirty'])} files, e.g. {', '.join(s['git']['dirty'][:3])}). "
-                        "`make run` needs a clean working tree.", 'git add -A && git commit -m "…"')
+        if s["git"]["branch"].startswith("story/"):
+            add("warn", f"You are on {s['git']['branch']}. Switch back to your normal branch before `make run`.",
+                "git switch main")
         if not s["mongo_up"]:
             add("warn", "MongoDB is not running on localhost:27017, so MongoDB tests would be skipped.", "make mongo")
         add("info", "Reminder: start `make run` in a terminal where MONGO_TEST_URI is exported, or MongoDB tests are skipped.",
@@ -254,12 +295,16 @@ def _hints(s: dict) -> list:
                               f"before the rest builds on it — or run everything.",
                     f"make run ONLY={stage_ids}      (or: make run)")
             else:
-                add("action", f"{len(ready)} task(s) are ready to run.", "make run")
+                plans = sorted({stories.plan_of(r) for r in ready})
+                review = "\n".join(f"git log --oneline {stories.info(p).get('base', 'main')}..{stories.branch(p)}"
+                                   f"   # review so far; or: make -C .worktrees/_story-{p} check" for p in plans)
+                add("action", f"{len(ready)} task(s) are ready to run. Optionally review the work merged so far first.",
+                    f"{review}\nmake run")
         elif not by("failed"):
             add("info", "Pending tasks wait for dependencies that are not done yet.")
 
-    if rows and not pending and not proposed and not by("claimed") and not by("passed") and not by("failed"):
-        add("ok", "Everything is merged. Verify the result on your branch.", "make check && make up")
-    elif done_ids and not run["active"] and not ready and not proposed and not by("failed"):
-        add("ok", "All runnable work is done. Check the merged result before continuing.", "make check")
+    unfinished = [st for st in s["stories"] if not st["complete"] and st["open"] == 0 and st["integrating"]]
+    for st in unfinished:
+        add("action", f"All tasks of {st['plan']} are merged into {st['branch']}, but the final check hasn't run yet. "
+                      "It runs when `make run` finishes; start it once more to finalize.", "make run")
     return hints
