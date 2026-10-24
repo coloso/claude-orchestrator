@@ -6,6 +6,7 @@
 
   "models": {
     "planner": { "id": "claude-opus-5-5", "effort": "xhigh" },
+    "reviewer": { "id": "claude-sonnet-5-5", "effort": "high" },
     "workers": {
       "opus":   { "id": "claude-opus-5-5", "effort": "high" },
       "sonnet": { "id": "claude-sonnet-5-5", "effort": "high" },

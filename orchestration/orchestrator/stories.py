@@ -15,7 +15,7 @@ from pathlib import Path
 
 import tasks
 import worktrees
-from common import ORCH, TOOLING, WORKTREES, emit, git, sh, tool_env
+from common import ORCH, PLANS_DIR, WORKTREES, emit, git, sh, tool_env
 
 STORIES_DIR = ORCH / "stories"
 DEFAULT_PLAN = "adhoc"
@@ -30,7 +30,7 @@ def plan_of(task: dict) -> str:
     if task.get("plan"):
         return task["plan"]
     root = task["id"].split(".")[0]
-    for f in sorted((TOOLING / "plans").glob("*.json")):
+    for f in sorted(PLANS_DIR.glob("*.json")):
         try:
             if any(t.get("id") == root for t in json.loads(f.read_text())):
                 return f.stem

@@ -27,7 +27,12 @@ def read(p: Path) -> dict:
 
 
 def write(status: str, task: dict) -> None:
-    path(status, task["id"]).write_text(json.dumps(task, indent=2))
+    # Write a new file and swap it in: truncating in place would let a reader that opened the
+    # file just before a rename (e.g. a racing claim) see it empty.
+    target = path(status, task["id"])
+    tmp = target.with_suffix(".tmp")  # not *.json, so list_tasks never picks it up
+    tmp.write_text(json.dumps(task, indent=2))
+    os.replace(tmp, target)
 
 
 def list_tasks(status: str) -> list:
@@ -83,23 +88,41 @@ PROPOSAL_FIELDS = ("title", "role", "prompt", "scope")
 
 
 def propose(source: dict, proposals: list) -> tuple:
-    """Store an agent's proposals as <source id>.<n> in proposed/. Returns (ids, errors)."""
+    """Store an agent's proposals as <source id>.<n> in proposed/. Returns (ids, errors).
+
+    depends_on entries may be existing task IDs or titles of other proposals in the same batch;
+    titles are rewritten to the IDs assigned here. Unknown entries are dropped and reported."""
     ids, errors = [], []
     prefix = f"{source['id']}."
-    taken = [int(tid[len(prefix):]) for tid in all_tasks() if tid.startswith(prefix) and tid[len(prefix):].isdigit()]
+    existing = set(all_tasks())
+    taken = [int(tid[len(prefix):]) for tid in existing if tid.startswith(prefix) and tid[len(prefix):].isdigit()]
     start = max(taken, default=0) + 1
+    valid = []
     for n, p in enumerate(proposals, start=start):
         missing = [f for f in PROPOSAL_FIELDS if not p.get(f)] if isinstance(p, dict) else list(PROPOSAL_FIELDS)
         if missing:
             errors.append(f"proposal {n}: missing {missing}")
             continue
+        valid.append((f"{source['id']}.{n}", p))
+    batch_ids = {tid for tid, _ in valid}
+    by_title = {str(p["title"]).strip(): tid for tid, p in valid}
+    for tid, p in valid:
+        deps = []
+        raw = p.get("depends_on") or []
+        for dep in [raw] if isinstance(raw, str) else raw:
+            dep = str(dep).strip()
+            resolved = dep if dep in existing or dep in batch_ids else by_title.get(dep)
+            if resolved and resolved != tid:
+                deps.append(resolved)
+            else:
+                errors.append(f"proposal {tid}: dropped dependency {dep!r} (not a task ID or a title in this batch)")
         task = {k: p[k] for k in PROPOSAL_FIELDS}
         task.update(
-            id=f"{source['id']}.{n}",
+            id=tid,
             plan=source.get("plan"),
             model=p.get("model"),
             effort=p.get("effort"),
-            depends_on=list(p.get("depends_on", [])),
+            depends_on=deps,
             proposed_by=source["id"],
             severity=p.get("severity"),
             rationale=p.get("rationale"),

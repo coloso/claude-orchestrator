@@ -38,13 +38,14 @@ The orchestrator is a Python CLI (`orchestration/orchestrator/orchestrator.py`, 
 
 | `make` | CLI (`python3 orchestration/orchestrator/orchestrator.py …`) | What it does |
 |---|---|---|
-| `make plan STORY=stories/S02-x.md` | `plan stories/S02-x.md` | The planner agent turns a story into a plan file, `orchestration/plans/S02-x.json`. Nothing is queued yet |
-| `make load PLAN=orchestration/plans/S02-x.json` | `load <plan>` | Queues the plan's tasks |
+| `make plan STORY=backlog/stories/S02-x.md` | `plan backlog/stories/S02-x.md` | The planner agent turns a story into a plan file, `backlog/plans/S02-x.json`. Nothing is queued yet |
+| `make load PLAN=backlog/plans/S02-x.json` | `load <plan>` | Queues the plan's tasks |
 | `make run` | `run [--workers N]` | Starts workers until nothing runnable is left, merging into `story/<plan>`; finalizes finished stories; serves the dashboard |
 | `make run ONLY=S02-01,S02-02` | `run --only S02-01,S02-02` | Runs only these tasks (e.g. the spec phase) |
 | `make dashboard` | `dashboard` | Live dashboard on http://localhost:8765/orchestration/dashboard/, with or without a run. Leave it open |
 | `make status` | `status` | Every task and its state; errors for failed ones |
 | `make proposals` | `proposals` | Follow-up tasks agents proposed, e.g. security fixes |
+| `make review` | `review` | Goes through the waiting proposals one by one (task text collapsed; t shows it): approve, reject, skip, chat with Claude about it (and have it adjust the proposal), or quit |
 | `make approve IDS="S02-07.1"` | `approve <ids>` | Queues proposals; they run on the next `make run` |
 | `make reject IDS="S02-07.2"` | `reject <ids>` | Discards proposals |
 | `make retry IDS="S02-03"` | `retry <ids>` | Puts tasks that used up their attempts back in the queue |
@@ -63,13 +64,13 @@ You stay in charge at three checkpoints: the **plan**, the **spec** and the **pr
                                           + spec review          hardening review
 ```
 
-1. **Write a story** in `stories/S<NN>-<slug>.md` (copy `stories/TEMPLATE.md`). The story describes the *what*, in the domain's language:
+1. **Write a story** in `backlog/stories/S<NN>-<slug>.md` (copy `backlog/stories/TEMPLATE.md`). The story describes the *what*, in the domain's language:
    - the user story;
    - the bounded context;
    - domain terms and rules;
    - acceptance criteria;
    - what's out of scope.
-2. **Plan it:** `make plan STORY=…` writes `orchestration/plans/S<NN>-<slug>.json`, with task IDs `S<NN>-01`, `S<NN>-02` and so on. **Review it before anything runs.** Check that each task's scope is narrow, that the dependencies make sense, and that every acceptance criterion has a test. The file is plain JSON, so edit it as needed.
+2. **Plan it:** `make plan STORY=…` writes `backlog/plans/S<NN>-<slug>.json`, with task IDs `S<NN>-01`, `S<NN>-02` and so on. **Review it before anything runs.** Check that each task's scope is narrow, that the dependencies make sense, and that every acceptance criterion has a test. The file is plain JSON, so edit it as needed.
 3. **Queue it:** `make load PLAN=…`. Commit the story and the plan to your branch whenever you like; `run` doesn't need a clean tree, because agents work on `story/<plan>`, which starts from your last commit.
 4. **Phase 1, the spec:** `make run ONLY=<api task>,<model task>,<spec review>`. The domain model doesn't depend on the spec, so it is built test-first at the same time.
 5. **Review the spec** on the story branch. While the story is in progress, it's checked out in `.worktrees/_story-<plan>`:
@@ -80,7 +81,7 @@ You stay in charge at three checkpoints: the **plan**, the **spec** and the **pr
 
    This is the cheapest moment to change your mind. Edit the spec yourself in that worktree (then `make generate` there and commit), or approve the proposed spec fixes. Later tasks start from the story branch, so they pick up your changes.
 6. **Phase 2, implementation:** `make run` runs everything else, including the HTTP adapter, MongoDB storage, e2e tests for the acceptance criteria, docs and the hardening review.
-7. **Decide on proposals:** `make proposals`, then `approve` or `reject`, then `make run`. Repeat until nothing important is left.
+7. **Decide on proposals:** `make review` (one by one), or `make proposals`, then `approve` or `reject`; then `make run`. Repeat until nothing important is left.
 8. **Ship:** when no task of the plan is left to run, `make run` finalizes the story:
    - it runs all checks on the combined `story/<plan>` and releases the branch;
    - it prints the review and push commands, which the dashboard also shows.
@@ -94,7 +95,7 @@ You stay in charge at three checkpoints: the **plan**, the **spec** and the **pr
 
 ### Example: a shopping list
 
-**1. Story:** `stories/S02-shopping-list.md`
+**1. Story:** `backlog/stories/S02-shopping-list.md`
 
 ```markdown
 # S02: Shopping lists
@@ -126,13 +127,13 @@ As a household member, I want shared shopping lists, so that we buy everything w
 **2. Plan:**
 
 ```bash
-make plan STORY=stories/S02-shopping-list.md
+make plan STORY=backlog/stories/S02-shopping-list.md
 ```
 
 The planner prints the plan it wrote. A typical result looks like this; yours will differ, which is why you review it:
 
 ```
-Wrote 8 task(s) to orchestration/plans/S02-shopping-list.json:
+Wrote 8 task(s) to backlog/plans/S02-shopping-list.json:
   S02-01   [api]       Shopping list API spec
   S02-02   [backend]   Shopping domain model and use cases (TDD)
   S02-03   [security]  Security review: shopping spec  (after S02-01)
@@ -148,7 +149,7 @@ Open the JSON and check it. For example: is the "merge duplicate products" rule 
 **3. Queue it** (and commit the story and plan to your branch whenever you like):
 
 ```bash
-make load PLAN=orchestration/plans/S02-shopping-list.json
+make load PLAN=backlog/plans/S02-shopping-list.json
 ```
 
 **4. Phase 1, spec and model:**
@@ -246,7 +247,9 @@ git branch -D story/todo-tasks && make reset
 orch-test/
 ├── CLAUDE.md          rules every agent reads
 ├── docker-compose.yml MongoDB 8 + backend
-├── stories/           your input: one story per feature (TEMPLATE.md, S01-todo.md, …)
+├── backlog/           your input; agents never touch it
+│   ├── stories/          one story per feature (TEMPLATE.md, S01-todo.md, …)
+│   └── plans/            plan files: todo-tasks.json (demo), S<NN>-*.json from `make plan`
 ├── backend/           Go 1.27 module                       ┐
 │   ├── api/openapi.yaml   API contract (source of truth)   │
 │   ├── internal/<context>/ bounded context = hexagon       │
@@ -270,7 +273,6 @@ orch-test/
 │   │   ├── worktrees.py      one worktree + branch per task
 │   │   └── quality_gate.py   scope check, TDD check, gate commands
 │   ├── roles/            role prompts: planner, api, backend, tests, security, docs, frontend
-│   ├── plans/            plan files: todo-tasks.json (demo), S<NN>-*.json from `make plan`
 │   └── dashboard/        live view, served by the orchestrator
 │
 ├── .orch/             runtime state (gitignored)
@@ -331,6 +333,7 @@ The orchestrator chooses the model for each agent:
 |---|---|---|
 | Planner | Claude Opus 5.5 (`claude-opus-5-5`, effort `xhigh`) | Always. One call per story, and the plan's quality decides everything after it |
 | Workers | Claude Haiku 5.5 (`claude-haiku-5-5`), Claude Sonnet 5.5 (`claude-sonnet-5-5`) or Claude Opus 5.5 (`claude-opus-5-5`) | The planner sets `"model"` (`haiku`, `sonnet`, `opus`) and `"effort"` (`low`, `medium`, `high`, `xhigh`) on every task |
+| Review chat | Claude Sonnet 5.5 (`claude-sonnet-5-5`, effort `high`) | `models.reviewer`: the `[c]hat` option in `make review`. Falls back to the planner model if unset |
 
 - **`haiku`:** mechanical, fully specified tasks, such as wiring per exact instructions, docs from code, or small fixes. It costs about a twentieth of Sonnet.
 - **`sonnet`:** anything that needs judgment, such as spec design, the DDD model written test-first, adapters with real logic, e2e tests, or security reviews. Most tasks use it, and a task without a model gets it.
@@ -398,7 +401,7 @@ Configuration (environment): `PORT` (8000), `STORAGE` (`memory` or `mongo`), `MO
 
 - `orchestration/config.json`:
   - `max_workers`, `max_attempts`, `agent.timeout_s`;
-  - `models`: planner model, worker models (aliases → IDs, optional `effort`), default, escalation, forbidden words;
+  - `models`: planner model, reviewer model (review chat), worker models (aliases → IDs, optional `effort`), default, escalation, forbidden words;
   - `mcp_servers` and `mcp`: MCP servers and which roles get them;
   - `agent.allowed_tools`: agents run with `--permission-mode acceptEdits`, and Bash access is limited to `check.sh` and the `go`/`npm` commands listed there;
   - `require_tests_for`: the TDD rule;

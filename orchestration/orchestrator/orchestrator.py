@@ -1,11 +1,12 @@
 """Meta-agent: plans tasks, runs parallel workers, merges passing branches.
 
-    python3 orchestration/orchestrator/orchestrator.py plan stories/S02-shopping-list.md  # planner -> plan file
-    python3 orchestration/orchestrator/orchestrator.py load orchestration/plans/S02-shopping-list.json
+    python3 orchestration/orchestrator/orchestrator.py plan backlog/stories/S02-shopping-list.md  # planner -> plan file
+    python3 orchestration/orchestrator/orchestrator.py load backlog/plans/S02-shopping-list.json
     python3 orchestration/orchestrator/orchestrator.py run [--workers 4] [--only S02-01,S02-02] [--fake]
     python3 orchestration/orchestrator/orchestrator.py dashboard              # live view, any time
     python3 orchestration/orchestrator/orchestrator.py status
     python3 orchestration/orchestrator/orchestrator.py proposals              # follow-ups agents proposed
+    python3 orchestration/orchestrator/orchestrator.py review                 # decide them one by one, interactively
     python3 orchestration/orchestrator/orchestrator.py approve T-010.1 [...]  # queue them (then `run`)
     python3 orchestration/orchestrator/orchestrator.py reject T-010.2 [...]
     python3 orchestration/orchestrator/orchestrator.py retry T-004 [...]      # failed -> pending, attempts reset
@@ -21,32 +22,34 @@ import re
 import shutil
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Optional
 
 import mcp
 import stories
 import tasks
 import worktrees
+from common import (MCP_DIR, ORCH, PLANS_DIR, ROLES_DIR, ROOT, STATUSES, STOP_FILE, STORY_FILES_DIR, WORKTREES,
+                    emit, ensure_dirs, git, load_config, model_args, tool_env)
 from state import record_run, write_state
-from common import (AGENTS_DIR, EVENTS_FILE, MCP_DIR, ORCH, ROLES_DIR, ROOT, STATE_FILE, STATUSES,
-                    STOP_FILE, WORKTREES, emit, ensure_dirs, git, load_config, model_args, sh, tool_env)
 
 
 # ---------------------------------------------------------------- planning
 
 def resolve_story(source: str) -> tuple:
-    """(story text, name) from a story path, a name in stories/, or a one-line goal (must contain spaces)."""
-    for candidate in (ROOT / source, ROOT / "stories" / source, ROOT / "stories" / f"{source}.md"):
+    """(story text, name) from a story path, a name in backlog/stories/, or a one-line goal (must contain spaces)."""
+    for candidate in (ROOT / source, STORY_FILES_DIR / source, STORY_FILES_DIR / f"{source}.md"):
         if candidate.is_file():
             return candidate.read_text(), candidate.stem
     if " " in source.strip():
         return source, re.sub(r"[^a-z0-9]+", "-", source.lower()).strip("-")[:40] or "plan"
-    stories = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "stories").glob("*.md") if p.name != "TEMPLATE.md")
-    sys.exit(f"Story '{source}' not found (looked in ./ and stories/).\n"
-             f"Create it from the template:  cp stories/TEMPLATE.md stories/{Path(source).stem}.md\n"
+    stories = sorted(p.relative_to(ROOT).as_posix() for p in STORY_FILES_DIR.glob("*.md") if p.name != "TEMPLATE.md")
+    sys.exit(f"Story '{source}' not found (looked in ./ and backlog/stories/).\n"
+             f"Create it from the template:  cp backlog/stories/TEMPLATE.md backlog/stories/{Path(source).stem}.md\n"
              f"Existing stories: {', '.join(stories) or 'none'}\n"
              'For a quick one-line goal instead, quote a sentence: make plan STORY="Add tags to todos"')
 
@@ -56,7 +59,7 @@ def cmd_plan(source: str, out: str, prefix: str) -> None:
     config = load_config()
     story, name = resolve_story(source)
     prefix = prefix or story_prefix(name)
-    out_path = ROOT / (out or f"orchestration/plans/{name}.json")
+    out_path = ROOT / out if out else PLANS_DIR / f"{name}.json"
     if out_path.exists():
         sys.exit(f"{out_path.relative_to(ROOT)} already exists; pass --out or delete it.")
 
@@ -371,17 +374,159 @@ def cmd_proposals() -> None:
         print("No proposals waiting.")
         return
     for t in proposed:
-        sev = f"[{t['severity']}] " if t.get("severity") else ""
-        deps = f"  (after {', '.join(t['depends_on'])})" if t.get("depends_on") else ""
-        print(f"{t['id']}  {sev}{t['title']}  — role {t['role']}, model {t.get('model') or 'default'}"
-              f"{'/' + t['effort'] if t.get('effort') else ''}, "
-              f"from {t['proposed_by']}{deps}")
-        if t.get("rationale"):
-            print(f"    why:   {t['rationale']}")
-        print(f"    scope: {', '.join(t['scope'])}")
-        for line in t["prompt"].splitlines():
-            print(f"    | {line}")
+        print_proposal(t)
         print()
+
+
+COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+SEVERITY_COLORS = {"critical": "1;31", "high": "31", "medium": "33", "low": "32"}
+
+
+def style(text: str, code: str) -> str:
+    return f"\033[{code}m{text}\033[0m" if COLOR else text
+
+
+def wrapped(text: str, indent: str = "  ") -> str:
+    """Wrap each line to the terminal width, keeping list items' continuation lines under their text."""
+    width = min(shutil.get_terminal_size((100, 20)).columns, 100)
+    out = []
+    for line in text.splitlines():
+        if not line.strip():
+            out.append("")
+            continue
+        item = re.match(r"(\s*(?:[-*•]|\d+[.)])\s+)", line)
+        hang = " " * len(item.group(1)) if item else re.match(r"\s*", line).group(0)
+        out.append(textwrap.fill(line, width, initial_indent=indent, subsequent_indent=indent + hang,
+                                 break_long_words=False, break_on_hyphens=False))
+    return "\n".join(out)
+
+
+def print_proposal(t: dict, heading: str = "", full_task: bool = True) -> None:
+    width = min(shutil.get_terminal_size((100, 20)).columns, 100)
+    head = f"━━ {heading + ' · ' if heading else ''}{t['id']} "
+    print(style(head + "━" * max(width - len(head), 0), "2"))
+    print(style(t["title"], "1"))
+    severity = t.get("severity")
+    meta = [style(severity, SEVERITY_COLORS.get(severity, "0")) if severity else None,
+            f"role {t['role']}",
+            f"model {t.get('model') or 'default'}{'/' + t['effort'] if t.get('effort') else ''}",
+            f"from {t['proposed_by']}",
+            f"after {', '.join(t['depends_on'])}" if t.get("depends_on") else None]
+    print(" · ".join(m for m in meta if m))
+    if t.get("rationale"):
+        print(f"\n{style('Why', '1;36')}\n{wrapped(t['rationale'])}")
+    print(f"\n{style('Scope', '1;36')}")
+    for s in t["scope"]:
+        print(f"  • {s}")
+    print(f"\n{style('Task', '1;36')}")
+    print_task(t, full_task)
+
+
+TASK_PREVIEW_LINES = 4
+
+
+def print_task(t: dict, full: bool = True) -> None:
+    """The task prompt; collapsed to its first paragraph (at most TASK_PREVIEW_LINES lines) unless full."""
+    lines = wrapped(t["prompt"]).splitlines()
+    if full:
+        print("\n".join(lines))
+        return
+    shown = lines[:TASK_PREVIEW_LINES]
+    if "" in shown:
+        shown = shown[:shown.index("")]
+    print("\n".join(shown))
+    hidden = sum(1 for line in lines[len(shown):] if line.strip())
+    if hidden:
+        print(style(f"  … {hidden} more line{'s' if hidden != 1 else ''}, press t to show the full task", "2"))
+
+
+CHOICES = style("[a]pprove  [r]eject  [s]kip  [t]ask  [c]hat about it  [q]uit", "1")
+
+
+def cmd_review() -> None:
+    """Go through the waiting proposals one by one and decide each in the terminal."""
+    proposed = tasks.list_tasks("proposed")
+    if not proposed:
+        print("No proposals waiting.")
+        return
+    if not sys.stdin.isatty():
+        sys.exit("review needs an interactive terminal; use `approve` / `reject` with IDs instead.")
+    for i, t in enumerate(proposed, start=1):
+        print()
+        print_proposal(t, heading=f"Proposal {i}/{len(proposed)}", full_task=False)
+        while True:
+            try:
+                answer = input(f"\n{CHOICES} › ").strip().lower()[:1]
+            except (EOFError, KeyboardInterrupt):
+                answer = "q"
+            if answer == "t":
+                print(f"\n{style('Task', '1;36')} {style(t['id'], '2')}")
+                print_task(t)
+                continue
+            if answer == "c":
+                t = chat_about_proposal(t, proposed)
+                if t is None:
+                    break
+                continue
+            if answer in ("a", "r", "s", "q"):
+                break
+        if t is None:
+            continue
+        if answer == "q":
+            print("\nStopped; the remaining proposals keep waiting.")
+            return
+        if answer in ("a", "r"):
+            cmd_decide([t["id"]], approve=answer == "a")
+
+
+def chat_about_proposal(t: dict, batch: list) -> Optional[dict]:
+    """Open an interactive Claude session about one proposal; returns it re-read from disk afterwards
+    (it may have been edited in the chat), or None if it is no longer waiting."""
+    config = load_config()
+    reviewer = config["models"].get("reviewer", config["models"]["planner"])
+    file = tasks.path("proposed", t["id"])
+    others = "\n".join(f"- {o['id']}: {o['title']} (after {', '.join(o['depends_on']) or 'nothing'})"
+                       for o in batch if o["id"] != t["id"])
+    system = (
+        "You are helping a human decide whether to approve, reject or change a follow-up task that an agent "
+        "proposed. The human decides in the orchestrator's review prompt after this chat; do not approve, reject "
+        "or queue anything yourself, and do not change code.\n\n"
+        f"The proposal is stored in {file.relative_to(ROOT)}:\n\n{json.dumps(t, indent=2, ensure_ascii=False)}\n\n"
+        f"Other proposals waiting:\n{others or '- none'}\n\n"
+        "Read the code, docs and reports it refers to before answering. If the human wants the proposal changed "
+        "(prompt, scope, model, effort, depends_on, ...), edit only that JSON file and keep it valid JSON with "
+        "the same id. depends_on holds task IDs."
+    )
+    servers, _ = mcp.servers_for("planner", config)
+    ensure_dirs()
+    cmd = [
+        "claude", f"Summarize proposal {t['id']} in a few lines: what it changes, why, its risks, and how it "
+                  "relates to the other proposals. Then wait for my questions.",
+        "--append-system-prompt", system,
+        *model_args(reviewer),
+        "--allowedTools", *config["planner"]["allowed_tools"], *mcp.allowed_tools(servers),
+        *mcp.claude_args(MCP_DIR / "review.json", servers),
+    ]
+    print(f"\nStarting a chat about {t['id']} with {reviewer['id']}. Exit with /exit or Ctrl-D to get back here.\n")
+    try:
+        subprocess.run(cmd, cwd=ROOT, env=tool_env())
+    except FileNotFoundError:
+        print("The `claude` CLI is not on PATH.")
+    except KeyboardInterrupt:
+        pass
+    if not file.exists():
+        print(f"\n{t['id']} is no longer waiting; moving on.")
+        return None
+    try:
+        updated = tasks.read(file)
+    except json.JSONDecodeError as e:
+        print(f"\n{file.relative_to(ROOT)} is no longer valid JSON ({e}); restoring the previous version.")
+        tasks.write("proposed", t)
+        return t
+    print()
+    print_proposal(updated, heading="Changed in the chat" if updated != t else "Back from the chat",
+                   full_task=False)
+    return updated
 
 
 def cmd_decide(ids: list, approve: bool) -> None:
@@ -459,7 +604,7 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     plan = sub.add_parser("plan", help="story file (or one-line goal) -> plan file for review")
     plan.add_argument("story", help="path to a story .md file, or a one-line goal in quotes")
-    plan.add_argument("--out", help="plan file to write (default orchestration/plans/<story name>.json)")
+    plan.add_argument("--out", help="plan file to write (default backlog/plans/<story name>.json)")
     plan.add_argument("--prefix", help="task ID prefix (default from the story file name, e.g. S02)")
     sub.add_parser("load").add_argument("file")
     run = sub.add_parser("run")
@@ -469,6 +614,7 @@ def main() -> None:
     sub.add_parser("status")
     sub.add_parser("dashboard", help="serve the live dashboard (works with or without a run)")
     sub.add_parser("proposals")
+    sub.add_parser("review", help="decide the waiting proposals one by one, interactively")
     sub.add_parser("approve").add_argument("ids", nargs="+")
     sub.add_parser("reject").add_argument("ids", nargs="+")
     sub.add_parser("retry", help="put failed tasks back in the queue").add_argument("ids", nargs="+")
@@ -487,6 +633,8 @@ def main() -> None:
         cmd_dashboard()
     elif args.cmd == "proposals":
         cmd_proposals()
+    elif args.cmd == "review":
+        cmd_review()
     elif args.cmd in ("approve", "reject"):
         cmd_decide(args.ids, approve=args.cmd == "approve")
     elif args.cmd == "retry":
