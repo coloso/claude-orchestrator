@@ -3,6 +3,7 @@
     python3 orchestration/orchestrator/orchestrator.py plan stories/S02-shopping-list.md  # planner -> plan file
     python3 orchestration/orchestrator/orchestrator.py load orchestration/plans/S02-shopping-list.json
     python3 orchestration/orchestrator/orchestrator.py run [--workers 4] [--only S02-01,S02-02] [--fake]
+    python3 orchestration/orchestrator/orchestrator.py dashboard              # live view, any time
     python3 orchestration/orchestrator/orchestrator.py status
     python3 orchestration/orchestrator/orchestrator.py proposals              # follow-ups agents proposed
     python3 orchestration/orchestrator/orchestrator.py approve T-010.1 [...]  # queue them (then `run`)
@@ -15,6 +16,7 @@ from __future__ import annotations
 import argparse
 import functools
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -27,6 +29,7 @@ from pathlib import Path
 import mcp
 import tasks
 import worktrees
+from state import record_run, write_state
 from common import (AGENTS_DIR, EVENTS_FILE, MCP_DIR, ORCH, ROLES_DIR, ROOT, STATE_FILE, STATUSES,
                     STOP_FILE, WORKTREES, emit, ensure_dirs, git, load_config, model_args, sh, tool_env)
 
@@ -215,6 +218,8 @@ def cmd_run(n_workers: int, fake: bool, only: list) -> None:
     for t in tasks.list_tasks("claimed"):
         tasks.move(t["id"], "claimed", "pending")
 
+    record_run(pid=os.getpid(), started=time.time(), base_branch=config["base_branch"], workers=n_workers,
+               fake=fake, only=only, mongo_test_uri=bool(os.environ.get("MONGO_TEST_URI")))
     start_dashboard(config["dashboard_port"])
     print(f"Dashboard: http://localhost:{config['dashboard_port']}/orchestration/dashboard/")
 
@@ -249,6 +254,7 @@ def cmd_run(n_workers: int, fake: bool, only: list) -> None:
             except subprocess.TimeoutExpired:
                 w.terminate()
         emit("run_stop")
+        record_run(finished=time.time())
         write_state()
     print_status()
     waiting = tasks.list_tasks("proposed")
@@ -304,29 +310,25 @@ def nothing_left_to_do(only: list = None) -> bool:
 
 # ---------------------------------------------------------------- state / dashboard
 
-def write_state() -> None:
-    events = []
-    if EVENTS_FILE.exists():
-        events = [json.loads(line) for line in EVENTS_FILE.read_text().splitlines() if line]
-    agents = [json.loads(p.read_text()) for p in sorted(AGENTS_DIR.glob("*.json"))]
-    task_rows = []
-    for tid, (status, t) in sorted(tasks.all_tasks().items()):
-        task_rows.append({**{k: t.get(k) for k in
-                             ("id", "title", "role", "model", "effort", "depends_on", "scope", "agent", "attempts",
-                              "error", "severity", "proposed_by")},
-                          "status": status})
-    cost = sum(e.get("cost_usd") or 0 for e in events if e["kind"] == "agent_result")
-    STATE_FILE.write_text(json.dumps({
-        "updated": time.time(),
-        "running": not STOP_FILE.exists(),
-        "cost_usd": round(cost, 4),
-        "tasks": task_rows,
-        "agents": agents,
-        "events": events[-100:],
-    }))
+def cmd_dashboard() -> None:
+    """Serve the dashboard and keep its state fresh, with or without a run in progress."""
+    config = load_config()
+    ensure_dirs()
+    url = f"http://localhost:{config['dashboard_port']}/orchestration/dashboard/"
+    serving = start_dashboard(config["dashboard_port"], quiet=True)
+    print(f"Dashboard: {url}" + ("" if serving else "  (already served by `make run`; refreshing state only)"))
+    print("Ctrl-C to stop.")
+    try:
+        while True:
+            write_state()
+            if not serving:
+                serving = start_dashboard(config["dashboard_port"], quiet=True)
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
 
 
-def start_dashboard(port: int) -> None:
+def start_dashboard(port: int, quiet: bool = False) -> bool:
     class Quiet(SimpleHTTPRequestHandler):
         def log_message(self, *args):
             pass
@@ -339,9 +341,11 @@ def start_dashboard(port: int) -> None:
     try:
         server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     except OSError as e:
-        print(f"(dashboard not started: {e})")
-        return
+        if not quiet:
+            print(f"(dashboard already served elsewhere, e.g. by `make dashboard`: {e.strerror})")
+        return False
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    return True
 
 
 # ---------------------------------------------------------------- proposals
@@ -447,6 +451,7 @@ def main() -> None:
     run.add_argument("--fake", action="store_true", help="dry run: workers write placeholders instead of calling Claude")
     run.add_argument("--only", default="", help="comma-separated task IDs: run just these (e.g. the spec, to review it first)")
     sub.add_parser("status")
+    sub.add_parser("dashboard", help="serve the live dashboard (works with or without a run)")
     sub.add_parser("proposals")
     sub.add_parser("approve").add_argument("ids", nargs="+")
     sub.add_parser("reject").add_argument("ids", nargs="+")
@@ -462,6 +467,8 @@ def main() -> None:
         cmd_run(args.workers, args.fake, [t for t in args.only.split(",") if t])
     elif args.cmd == "status":
         print_status()
+    elif args.cmd == "dashboard":
+        cmd_dashboard()
     elif args.cmd == "proposals":
         cmd_proposals()
     elif args.cmd in ("approve", "reject"):

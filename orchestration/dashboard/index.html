@@ -6,105 +6,277 @@
 <title>Agent Orchestra</title>
 <style>
   :root {
-    --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6b7280; --border: #e3e6eb;
-    --proposed: #d97706; --pending: #9ca3af; --claimed: #2563eb; --passed: #7c3aed; --done: #16a34a; --failed: #dc2626;
+    --bg: #f5f6f8; --panel: #fff; --text: #1d2330; --muted: #6b7280; --border: #e2e5ea; --code: #f0f2f5;
+    --proposed: #d97706; --pending: #9ca3af; --claimed: #2563eb; --passed: #7c3aed; --done: #16a34a;
+    --failed: #dc2626; --rejected: #9ca3af;
+    --action: #2563eb; --warn: #d97706; --info: #6b7280; --ok: #16a34a;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #0f1218; --panel: #171b23; --text: #e5e7eb; --muted: #9ca3af; --border: #2a303b; }
+    :root { --bg: #0f1218; --panel: #171b23; --text: #e5e7eb; --muted: #9ca3af; --border: #2a303b; --code: #1f2430; }
   }
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 20px 16px; font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  body { margin: 0; padding: 20px 16px 60px; font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  main { max-width: 1400px; margin: 0 auto; }
   h1 { font-size: 18px; margin: 0; }
-  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 24px 0 8px; }
-  header { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: baseline; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 26px 0 8px; }
+  code, pre { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
   .muted { color: var(--muted); }
-  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
-  .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; min-width: 0; }
-  .card b { display: block; overflow-wrap: anywhere; }
-  .board { display: grid; gap: 10px; grid-template-columns: repeat(6, minmax(0, 1fr)); }
-  @media (max-width: 800px) { .board { grid-template-columns: 1fr; } }
-  .col { display: flex; flex-direction: column; gap: 8px; }
-  .col h3 { font-size: 13px; margin: 0; display: flex; align-items: center; }
-  .task { border-left: 3px solid var(--c); }
-  .task .err { color: var(--failed); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 6em; overflow: hidden; }
-  .tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--bg); border: 1px solid var(--border); }
-  #events { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; font: 12px/1.6 ui-monospace, monospace; padding: 8px 12px; max-height: 340px; overflow: auto; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; font-size: 12px; border: 1px solid var(--border); background: var(--panel); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+  .tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--code); border: 1px solid var(--border); white-space: nowrap; }
+
+  /* next steps */
+  .hints { display: grid; gap: 8px; }
+  .hint { border-left: 4px solid var(--c); }
+  .hint .cmd { display: flex; gap: 8px; align-items: flex-start; margin-top: 6px; }
+  .hint .cmd pre { flex: 1; background: var(--code); padding: 6px 8px; border-radius: 6px; }
+  button { font: inherit; font-size: 12px; cursor: pointer; border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 6px; padding: 4px 8px; }
+  button:hover { border-color: var(--muted); }
+
+  /* stages */
+  .stage { margin-bottom: 10px; }
+  .stage-head { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+  .tasks { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .task { border-left: 4px solid var(--c); cursor: pointer; }
+  .task:hover, .task.sel { outline: 2px solid var(--claimed); outline-offset: -1px; }
+  .task .t { font-weight: 600; overflow-wrap: anywhere; }
+  .task .meta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .task .live { font-size: 12px; color: var(--claimed); margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .agents { display: flex; flex-wrap: wrap; gap: 8px; }
+
+  /* events */
+  #events { max-height: 320px; overflow: auto; font: 12px/1.7 ui-monospace, monospace; }
   #events div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* drawer */
+  #drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(640px, 100vw); background: var(--panel); border-left: 1px solid var(--border);
+            transform: translateX(100%); transition: transform .15s; overflow: auto; padding: 16px; z-index: 10; box-shadow: -8px 0 24px rgba(0,0,0,.12); }
+  #drawer.open { transform: none; }
+  #drawer h3 { margin: 0 0 4px; font-size: 16px; }
+  #drawer h4 { margin: 16px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  #drawer .box { background: var(--code); border-radius: 6px; padding: 8px; max-height: 360px; overflow: auto; }
+  .log div { padding: 2px 0; border-bottom: 1px dashed var(--border); overflow-wrap: anywhere; }
+  .err { color: var(--failed); }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 </style>
 </head>
 <body>
-<header>
-  <h1>Agent Orchestra</h1>
-  <span id="run" class="muted">waiting for .orch/state.json…</span>
-  <span id="cost" class="muted"></span>
-</header>
+<main>
+  <header class="row">
+    <h1>Agent Orchestra</h1>
+    <span id="runpill" class="pill"><span class="dot"></span><span>waiting for state…</span></span>
+    <span id="meta" class="muted"></span>
+  </header>
 
-<h2>Agents</h2>
-<div id="agents" class="grid"></div>
+  <h2>What now?</h2>
+  <div id="hints" class="hints"><div class="card muted">Waiting for <code>.orch/state.json</code>. Is <code>make dashboard</code> or <code>make run</code> running?</div></div>
 
-<h2>Tasks</h2>
-<div id="board" class="board"></div>
+  <div id="planner-section" hidden>
+    <h2>Planner</h2>
+    <div id="planner" class="card"></div>
+  </div>
 
-<h2>Events</h2>
-<div id="events"></div>
+  <div id="agents-section" hidden>
+    <h2>Agents</h2>
+    <div id="agents" class="agents"></div>
+  </div>
+
+  <h2>Tasks <span id="counts" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
+  <div id="stages"></div>
+
+  <h2>Events <span id="evfilter" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
+  <div id="events" class="card"></div>
+</main>
+
+<aside id="drawer" aria-label="Task details"></aside>
 
 <script>
-const STATUSES = ["proposed", "pending", "claimed", "passed", "done", "failed"];
-const LABELS = { proposed: "Proposed", pending: "Pending", claimed: "In progress", passed: "Passed gate", done: "Merged", failed: "Failed" };
-const AGENT_COLOR = { idle: "--pending", working: "--claimed", gating: "--passed", stopped: "--muted" };
+const LABEL = { proposed: "proposed — needs you", pending: "pending", claimed: "in progress", passed: "passed gate", done: "merged", failed: "failed", rejected: "rejected" };
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const time = (ts) => new Date(ts * 1000).toLocaleTimeString();
+const clock = (ts) => ts ? new Date(ts * 1000).toLocaleTimeString() : "";
+const dur = (s) => s == null ? "" : s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`;
+const money = (v) => v ? `$${v.toFixed(2)}` : "";
+let state = null;
+let selected = decodeURIComponent(location.hash.slice(1)) || null;
 
-function render(s) {
-  const done = s.tasks.filter((t) => t.status === "done").length;
-  document.getElementById("run").textContent =
-    `${s.running ? "running" : "stopped"} · ${done}/${s.tasks.length} merged · updated ${time(s.updated)}`;
-  document.getElementById("cost").textContent = s.cost_usd ? `$${s.cost_usd.toFixed(2)}` : "";
-
-  document.getElementById("agents").innerHTML = s.agents.map((a) => `
-    <div class="card">
-      <b><span class="dot" style="background:var(${AGENT_COLOR[a.status] || "--muted"})"></span>${esc(a.id)}</b>
-      <span class="muted">${esc(a.status)}${a.task ? ` · ${esc(a.task)} (${esc(a.role)}, ${esc(a.model)})` : ""}</span>
-    </div>`).join("") || `<span class="muted">no agents yet</span>`;
-
-  document.getElementById("board").innerHTML = STATUSES.map((st) => {
-    const items = s.tasks.filter((t) => t.status === st);
-    return `<div class="col">
-      <h3><span class="dot" style="background:var(--${st})"></span>${LABELS[st]} <span class="muted">&nbsp;${items.length}</span></h3>
-      ${items.map((t) => `
-        <div class="card task" style="--c:var(--${st})">
-          <b>${esc(t.id)} · ${esc(t.title)}</b>
-          <span class="tag">${esc(t.role)}</span>
-          ${t.model ? `<span class="tag">${esc(t.model)}${t.effort ? "/" + esc(t.effort) : ""}</span>` : ""}
-          ${t.agent ? `<span class="tag">${esc(t.agent)}</span>` : ""}
-          ${t.attempts > 1 ? `<span class="tag">attempt ${t.attempts}</span>` : ""}
-          ${t.severity ? `<span class="tag">${esc(t.severity)}</span>` : ""}
-          ${t.status === "proposed" ? `<div class="muted">approve: orchestrator.py approve ${esc(t.id)}</div>` : ""}
-          ${t.depends_on?.length ? `<div class="muted">after ${t.depends_on.map(esc).join(", ")}</div>` : ""}
-          ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}
-        </div>`).join("")}
-    </div>`;
-  }).join("");
-
-  const box = document.getElementById("events");
-  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 20;
-  box.innerHTML = s.events.map((e) => {
-    const who = [e.agent, e.task].filter(Boolean).join(" ");
-    const info = e.detail || e.error || (e.cost_usd != null ? `$${e.cost_usd.toFixed(3)}, ${e.turns} turns` : "");
-    return `<div><span class="muted">${time(e.ts)}</span> ${esc(e.kind)} <b style="display:inline">${esc(who)}</b> ${esc(info)}</div>`;
-  }).join("");
-  if (atBottom) box.scrollTop = box.scrollHeight;
+function copy(btn, text) {
+  navigator.clipboard?.writeText(text).then(() => { btn.textContent = "copied"; setTimeout(() => (btn.textContent = "copy"), 1200); });
 }
 
+function renderHeader(s) {
+  const r = s.run, pill = document.getElementById("runpill");
+  const busy = s.agents.filter((a) => a.status === "working" || a.status === "gating").length;
+  const [color, text] = r.active ? ["--claimed", `running · ${busy}/${s.agents.length} agents busy${r.fake ? " · dry run" : ""}`]
+    : s.planner && !s.planner.finished && Date.now() / 1000 - s.planner.updated < 120 ? ["--proposed", "planning"]
+    : ["--pending", "idle"];
+  pill.innerHTML = `<span class="dot" style="background:var(${color})"></span><span>${text}</span>`;
+  document.getElementById("meta").textContent =
+    `branch ${s.git.branch}${s.git.dirty.length ? ` (${s.git.dirty.length} uncommitted)` : ""} · MongoDB ${s.mongo_up ? "up" : "down"} · agent cost ${money(s.cost_usd) || "$0.00"} · updated ${clock(s.updated)}`;
+}
+
+function renderHints(s) {
+  document.getElementById("hints").innerHTML = s.hints.map((h, i) => `
+    <div class="card hint" style="--c:var(--${h.level})">
+      <div>${esc(h.text)}</div>
+      ${h.cmd ? `<div class="cmd"><pre>${esc(h.cmd)}</pre><button data-copy="${i}">copy</button></div>` : ""}
+    </div>`).join("") || `<div class="card muted">Nothing to do.</div>`;
+  document.querySelectorAll("#hints [data-copy]").forEach((b) => (b.onclick = () => copy(b, s.hints[b.dataset.copy].cmd)));
+}
+
+function renderPlanner(s) {
+  const p = s.planner, sec = document.getElementById("planner-section");
+  const recent = p && (!p.finished || Date.now() / 1000 - p.updated < 3600);
+  sec.hidden = !recent;
+  if (!recent) return;
+  const status = p.error ? `<span class="err">failed: ${esc(p.error.slice(0, 200))}</span>`
+    : p.finished ? `finished${p.cost_usd != null ? `, ${money(p.cost_usd)}` : ""}${p.plan_file ? ` → <code>${esc(p.plan_file)}</code>` : ""}`
+    : `working for ${dur(Math.round(Date.now() / 1000 - p.started))} · ~${Math.round(p.thinking_tokens / 1000)}k thinking tokens · last activity ${dur(Math.round(Date.now() / 1000 - p.updated))} ago`;
+  document.getElementById("planner").innerHTML = `
+    <div class="row"><b>${esc(p.name)}</b><span class="muted">${status}</span></div>
+    <div class="muted" style="margin-top:6px">${p.tool_count} files/commands read${p.tools.length ? ":" : ""}</div>
+    <pre class="muted">${esc(p.tools.join("\n"))}</pre>
+    <div class="muted" style="margin-top:4px">log: <code>.orch/logs/${esc(p.log)}</code></div>`;
+}
+
+function renderAgents(s) {
+  document.getElementById("agents-section").hidden = !s.agents.length;
+  const color = { idle: "--pending", working: "--claimed", gating: "--passed", stopped: "--rejected" };
+  document.getElementById("agents").innerHTML = s.agents.map((a) => `
+    <span class="pill"><span class="dot" style="background:var(${color[a.status] || "--pending"})"></span>
+      ${esc(a.id)} · ${esc(a.status)}${a.task ? ` · <a href="#${esc(a.task)}">${esc(a.task)}</a> (${esc(a.model || "")})` : ""}</span>`).join("");
+}
+
+function taskCard(t) {
+  const model = [t.model, t.effort].filter(Boolean).join("/");
+  return `<div class="card task ${t.id === selected ? "sel" : ""}" style="--c:var(--${t.status})" data-id="${esc(t.id)}">
+    <div class="t">${esc(t.id)} · ${esc(t.title)}</div>
+    <div class="meta">
+      <span class="tag" style="color:var(--${t.status})">${LABEL[t.status]}</span>
+      <span class="tag">${esc(t.role)}</span>
+      ${model ? `<span class="tag">${esc(model)}</span>` : ""}
+      ${t.severity ? `<span class="tag">${esc(t.severity)}</span>` : ""}
+      ${t.attempts > 1 ? `<span class="tag">attempt ${t.attempts}</span>` : ""}
+      ${t.duration_s != null ? `<span class="tag">${dur(t.duration_s)}</span>` : ""}
+      ${t.cost_usd ? `<span class="tag">${money(t.cost_usd)}</span>` : ""}
+    </div>
+    ${t.last_tool ? `<div class="live">▸ ${esc(t.last_tool)}</div>` : ""}
+    ${t.status === "pending" && t.depends_on?.length ? `<div class="muted" style="font-size:12px;margin-top:4px">after ${t.depends_on.map(esc).join(", ")}</div>` : ""}
+  </div>`;
+}
+
+function renderTasks(s) {
+  const counts = {};
+  s.tasks.forEach((t) => (counts[t.status] = (counts[t.status] || 0) + 1));
+  document.getElementById("counts").textContent = Object.entries(counts).map(([k, v]) => `${v} ${LABEL[k]}`).join(" · ");
+  const proposals = s.tasks.filter((t) => t.status === "proposed" || t.status === "rejected");
+  const planned = s.tasks.filter((t) => !proposals.includes(t));
+  const stages = [...new Set(planned.map((t) => t.stage))].sort((a, b) => a - b);
+  let html = stages.map((n) => `<div class="stage"><div class="stage-head">Stage ${n}${n === 1 ? " — no dependencies" : ""}</div>
+    <div class="tasks">${planned.filter((t) => t.stage === n).map(taskCard).join("")}</div></div>`).join("");
+  if (proposals.length) html += `<div class="stage"><div class="stage-head">Proposed by agents — approve or reject</div>
+    <div class="tasks">${proposals.map(taskCard).join("")}</div></div>`;
+  document.getElementById("stages").innerHTML = html || `<div class="card muted">No tasks queued.</div>`;
+  document.querySelectorAll(".task").forEach((el) => (el.onclick = () => select(el.dataset.id)));
+}
+
+function renderEvents(s) {
+  const box = document.getElementById("events");
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 20;
+  const evs = selected ? s.events.filter((e) => e.task === selected) : s.events;
+  document.getElementById("evfilter").innerHTML = selected ? `for ${esc(selected)} · <a href="#" id="clearsel">show all</a>` : "";
+  box.innerHTML = evs.map((e) => {
+    const info = e.detail || e.error || (e.cost_usd != null ? `$${e.cost_usd.toFixed(3)}, ${e.turns} turns` : "");
+    return `<div><span class="muted">${clock(e.ts)}</span> ${esc(e.kind)} <b>${esc([e.agent, e.task].filter(Boolean).join(" "))}</b> ${esc(info)}</div>`;
+  }).join("") || `<span class="muted">No events.</span>`;
+  if (atBottom) box.scrollTop = box.scrollHeight;
+  const c = document.getElementById("clearsel");
+  if (c) c.onclick = (ev) => { ev.preventDefault(); select(null); };
+}
+
+// ---------------------------------------------------------------- drawer
+
+async function renderLog(file) {
+  const res = await fetch(`/.orch/logs/${encodeURIComponent(file)}`, { cache: "no-store" });
+  if (!res.ok) return `<span class="muted">log not available</span>`;
+  const lines = (await res.text()).split("\n").filter(Boolean);
+  const out = [], names = {};
+  for (const line of lines) {
+    let m; try { m = JSON.parse(line); } catch { continue; }
+    if (m.type === "assistant") for (const b of m.message?.content || []) {
+      if (b.type === "tool_use") {
+        const i = b.input || {}; names[b.id] = b.name;
+        out.push(`<div>▸ <b>${esc(b.name)}</b> ${esc(String(i.file_path || i.command || i.pattern || i.path || JSON.stringify(i)).slice(0, 300))}</div>`);
+      } else if (b.type === "text" && b.text?.trim()) out.push(`<div class="muted">${esc(b.text.slice(0, 600))}</div>`);
+    } else if (m.type === "user") for (const b of m.message?.content || []) {
+      if (b.is_error) out.push(`<div class="err">✗ ${esc(names[b.tool_use_id] || "tool")}: ${esc(String(typeof b.content === "string" ? b.content : JSON.stringify(b.content)).slice(0, 400))}</div>`);
+    } else if (m.type === "result") out.push(`<div><b>${m.is_error ? "✗ failed" : "✓ finished"}</b> · ${m.num_turns} turns · $${(m.total_cost_usd || 0).toFixed(2)}<pre>${esc(String(m.result || "").slice(0, 3000))}</pre></div>`);
+  }
+  return out.join("") || `<span class="muted">no activity yet</span>`;
+}
+
+async function renderDrawer() {
+  const d = document.getElementById("drawer");
+  const t = state?.tasks.find((x) => x.id === selected);
+  if (!t) { d.classList.remove("open"); return; }
+  d.classList.add("open");
+  const model = [t.model, t.effort].filter(Boolean).join("/") || "default";
+  const logs = t.logs || [];
+  const keepOpen = [...d.querySelectorAll("details[open]")].map((x) => x.dataset.k);
+  d.innerHTML = `
+    <div class="row" style="justify-content:space-between"><h3>${esc(t.id)} · ${esc(t.title)}</h3><button id="close">close</button></div>
+    <div class="meta row" style="gap:6px">
+      <span class="tag" style="color:var(--${t.status})">${LABEL[t.status]}</span><span class="tag">${esc(t.role)}</span>
+      <span class="tag">${esc(model)}</span>${t.ran_as ? `<span class="tag">ran as ${esc(t.ran_as)}</span>` : ""}
+      <span class="tag">stage ${t.stage}</span>${t.attempts ? `<span class="tag">attempts ${t.attempts}</span>` : ""}
+      ${t.duration_s != null ? `<span class="tag">${dur(t.duration_s)}</span>` : ""}${t.cost_usd ? `<span class="tag">${money(t.cost_usd)}</span>` : ""}
+    </div>
+    ${t.rationale ? `<h4>Why (proposal)</h4><div>${esc(t.rationale)}</div><div class="muted">proposed by ${esc(t.proposed_by)}</div>` : ""}
+    ${t.status === "proposed" ? `<h4>Decide</h4><pre class="box">make approve IDS=${esc(t.id)}\nmake reject IDS=${esc(t.id)}</pre>` : ""}
+    ${t.status === "failed" ? `<h4>Retry</h4><pre class="box">make retry IDS=${esc(t.id)} && make run</pre>` : ""}
+    ${t.error || t.failures?.length ? `<h4>Errors</h4><div class="box err"><pre>${esc(t.error || t.failures[t.failures.length - 1])}</pre></div>` : ""}
+    <h4>Depends on</h4><div>${(t.depends_on || []).map((x) => `<a href="#${esc(x)}">${esc(x)}</a>`).join(", ") || "—"}</div>
+    <h4>Scope (files it may change)</h4><pre class="box">${esc((t.scope || []).join("\n"))}</pre>
+    <details data-k="prompt" ${keepOpen.includes("prompt") ? "open" : ""}><summary>Task prompt (${(t.prompt || "").length} chars)</summary><pre class="box">${esc(t.prompt)}</pre></details>
+    <h4>Agent activity ${logs.length ? `(${logs.length} attempt${logs.length > 1 ? "s" : ""})` : ""}</h4>
+    ${logs.length ? logs.slice().reverse().map((f, i) => `<details data-k="${esc(f)}" ${i === 0 || keepOpen.includes(f) ? "open" : ""}><summary>${esc(f)}</summary><div class="box log" data-log="${esc(f)}">loading…</div></details>`).join("")
+      : `<div class="muted">${t.status === "pending" ? "Not started yet." : "No agent log (dry run or not run)."}</div>`}`;
+  document.getElementById("close").onclick = () => select(null);
+  for (const el of d.querySelectorAll("[data-log]")) {
+    const box = el, f = el.dataset.log, atBottom = true;
+    renderLog(f).then((html) => { box.innerHTML = html; if (atBottom) box.scrollTop = box.scrollHeight; });
+  }
+}
+
+function select(id) {
+  selected = id;
+  history.replaceState(null, "", id ? `#${encodeURIComponent(id)}` : location.pathname);
+  if (state) { renderTasks(state); renderEvents(state); }
+  renderDrawer();
+}
+window.addEventListener("hashchange", () => select(decodeURIComponent(location.hash.slice(1)) || null));
+
+// ---------------------------------------------------------------- polling
+
+let lastDrawer = 0;
 async function poll() {
   try {
     const res = await fetch("/.orch/state.json", { cache: "no-store" });
-    if (res.ok) render(await res.json());
-  } catch (e) { /* orchestrator not running yet */ }
-  setTimeout(poll, 1000);
+    if (res.ok) {
+      state = await res.json();
+      renderHeader(state); renderHints(state); renderPlanner(state); renderAgents(state); renderTasks(state); renderEvents(state);
+      const t = state.tasks.find((x) => x.id === selected);
+      if (selected && (Date.now() - lastDrawer > 4000 || !document.getElementById("drawer").classList.contains("open"))) {
+        if (!t || t.status === "claimed" || Date.now() - lastDrawer > 15000) { lastDrawer = Date.now(); renderDrawer(); }
+      }
+    }
+  } catch (e) { /* server not up yet */ }
+  setTimeout(poll, 1500);
 }
 poll();
+if (selected) setTimeout(renderDrawer, 300);
 </script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 ORCH := python3 orchestration/orchestrator/orchestrator.py
 PLAN ?= orchestration/plans/todo-tasks.json
 
-.PHONY: plan load demo dry-run status proposals approve reject retry run reset backend generate check up down logs mongo test-mongo
+.PHONY: plan load demo dry-run dashboard status proposals approve reject retry run reset backend generate check up down logs mongo test-mongo
 
 plan:             ## make plan STORY=S02-shopping-list (file in stories/) -> orchestration/plans/S02-shopping-list.json
 	$(ORCH) plan "$(STORY)"
@@ -16,6 +16,9 @@ demo:             ## queue the prepared todo-API plan and run it with real Claud
 dry-run:          ## same flow without calling Claude (run it on a throwaway branch)
 	$(ORCH) load $(PLAN)
 	$(ORCH) run --fake
+
+dashboard:        ## live dashboard on http://localhost:8765/orchestration/dashboard/ (keep it running in a 2nd terminal)
+	$(ORCH) dashboard
 
 status:
 	$(ORCH) status

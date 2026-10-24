@@ -25,8 +25,11 @@ git add -A && git commit -m "Initial scaffold"   # the orchestrator merges into 
 git switch -c dry-run && make dry-run
 git switch main && git branch -D dry-run && make reset
 
-# The real thing: the prepared todo plan (stories/S01-todo.md), 10 tasks
-make demo        # watch it on http://localhost:8765/orchestration/dashboard/
+# Keep the dashboard open in a second terminal: it shows progress and tells you the next step
+make dashboard   # http://localhost:8765/orchestration/dashboard/
+
+# The real thing: the prepared todo plan, 10 tasks
+make demo
 ```
 
 ## Using the orchestrator
@@ -39,6 +42,7 @@ The orchestrator is a Python CLI (`orchestration/orchestrator/orchestrator.py`, 
 | `make load PLAN=orchestration/plans/S02-x.json` | `load <plan>` | Queues the plan's tasks |
 | `make run` | `run [--workers N]` | Starts workers until nothing runnable is left; serves the dashboard |
 | `make run ONLY=S02-01,S02-02` | `run --only S02-01,S02-02` | Runs only these tasks (e.g. the spec phase) |
+| `make dashboard` | `dashboard` | Live dashboard on http://localhost:8765/orchestration/dashboard/, with or without a run. Leave it open |
 | `make status` | `status` | Every task and its state; errors for failed ones |
 | `make proposals` | `proposals` | Follow-up tasks agents proposed, e.g. security fixes |
 | `make approve IDS="S02-07.1"` | `approve <ids>` | Queues proposals; they run on the next `make run` |
@@ -194,7 +198,11 @@ curl -s -X POST localhost:8000/api/shopping-lists -d '{"name":"Weekend"}' -H 'Co
 
 ### Monitoring and troubleshooting
 
-- **Dashboard:** http://localhost:8765/orchestration/dashboard/ while `run` is active. It shows agents, a task board, live tool calls and cost.
+- **Dashboard:** run `make dashboard` in a second terminal and keep http://localhost:8765/orchestration/dashboard/ open. `make run` serves it too, while it runs.
+  - **What now?** The next step, with the exact command to copy. It covers: load a plan, commit first, MongoDB is down, `MONGO_TEST_URI` is missing from the run, run stage 1 and review it, a task failed so retry it, proposals are waiting, or everything is merged so check it.
+  - **Planner:** while `make plan` runs, the files it read and its thinking-token count. If those numbers grow, it isn't hung.
+  - **Tasks by stage:** stages come from the dependencies, and proposals have their own lane. Each card shows status, model and effort, duration and cost, and the agent's current tool call.
+  - **Click a task** for its prompt, scope, dependencies, errors and the agent's step-by-step log for every attempt.
 - **`make status`:** a failed task shows the gate or agent error.
   - **Attempts:** every task gets `max_attempts` (2), each in a fresh worktree.
   - **Retry:** after fixing the cause (an unclear prompt in the plan, a wrong scope, …), `make retry IDS=…` and then `make run`.
