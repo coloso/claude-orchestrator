@@ -33,14 +33,24 @@ from common import (AGENTS_DIR, EVENTS_FILE, MCP_DIR, ORCH, ROLES_DIR, ROOT, STA
 
 # ---------------------------------------------------------------- planning
 
+def resolve_story(source: str) -> tuple:
+    """(story text, name) from a story path, a name in stories/, or a one-line goal (must contain spaces)."""
+    for candidate in (ROOT / source, ROOT / "stories" / source, ROOT / "stories" / f"{source}.md"):
+        if candidate.is_file():
+            return candidate.read_text(), candidate.stem
+    if " " in source.strip():
+        return source, re.sub(r"[^a-z0-9]+", "-", source.lower()).strip("-")[:40] or "plan"
+    stories = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "stories").glob("*.md") if p.name != "TEMPLATE.md")
+    sys.exit(f"Story '{source}' not found (looked in ./ and stories/).\n"
+             f"Create it from the template:  cp stories/TEMPLATE.md stories/{Path(source).stem}.md\n"
+             f"Existing stories: {', '.join(stories) or 'none'}\n"
+             'For a quick one-line goal instead, quote a sentence: make plan STORY="Add tags to todos"')
+
+
 def cmd_plan(source: str, out: str, prefix: str) -> None:
     """Let the planner agent turn a story file (or a one-line goal) into a plan file for review."""
     config = load_config()
-    story_path = ROOT / source
-    if story_path.is_file():
-        story, name = story_path.read_text(), story_path.stem
-    else:
-        story, name = source, re.sub(r"[^a-z0-9]+", "-", source.lower()).strip("-")[:40] or "plan"
+    story, name = resolve_story(source)
     prefix = prefix or story_prefix(name)
     out_path = ROOT / (out or f"orchestration/plans/{name}.json")
     if out_path.exists():
@@ -55,20 +65,22 @@ def cmd_plan(source: str, out: str, prefix: str) -> None:
         f"Use task IDs {prefix}-01, {prefix}-02, ... in order.\n\n"
         "Return the task list as JSON."
     )
-    print(f"Planning with Claude ({config['models']['planner']['id']})...")
+    planner = config["models"]["planner"]
     ensure_dirs()
     servers, _ = mcp.servers_for("planner", config)
-    result = sh([
+    cmd = [
         "claude", "-p", prompt,
         "--append-system-prompt", (ROLES_DIR / "planner.md").read_text(),
-        *model_args(config["models"]["planner"]),
+        *model_args(planner),
         "--allowedTools", *config["planner"]["allowed_tools"], *mcp.allowed_tools(servers),
         *mcp.claude_args(MCP_DIR / "planner.json", servers),
-        "--output-format", "json",
-    ], check=False, stdin=subprocess.DEVNULL, env=tool_env())
-    if result.returncode != 0:
-        sys.exit(f"planner failed:\n{result.stdout}\n{result.stderr}")
-    text = json.loads(result.stdout)["result"]
+        "--output-format", "stream-json", "--verbose",
+    ]
+    log_path = ORCH / "logs" / f"planner-{name}.jsonl"
+    timeout = config["planner"].get("timeout_s", 1200)
+    print(f"Planning {name} with {planner['id']} (effort {planner.get('effort', 'default')}); "
+          f"this can take a few minutes. Ctrl-C to abort. Log: {log_path.relative_to(ROOT)}")
+    text = run_planner(cmd, log_path, timeout)
     match = re.search(r"\[.*\]", text, re.S)
     if not match:
         sys.exit(f"planner returned no JSON array:\n{text}")
@@ -82,10 +94,62 @@ def cmd_plan(source: str, out: str, prefix: str) -> None:
     print(f"\nReview or edit {rel}, then queue it:  make load PLAN={rel}")
 
 
+def run_planner(cmd: list, log_path: Path, timeout: int) -> str:
+    """Run the planner, echo its progress live, and return its final text."""
+    start = time.time()
+    proc = subprocess.Popen(cmd, cwd=ROOT, env=tool_env(), text=True, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    timer = threading.Timer(timeout, proc.kill)
+    timer.start()
+    result, other = None, []
+    last_heartbeat = start
+    try:
+        with log_path.open("w") as log:
+            for line in proc.stdout:
+                log.write(line)
+                log.flush()
+                try:
+                    msg = json.loads(line)
+                except json.JSONDecodeError:
+                    other.append(line)
+                    continue
+                elapsed = time.strftime("%M:%S", time.gmtime(time.time() - start))
+                if msg.get("type") == "assistant":
+                    for block in msg.get("message", {}).get("content", []):
+                        if block.get("type") == "tool_use":
+                            inp = block.get("input", {})
+                            detail = (inp.get("file_path") or inp.get("pattern") or inp.get("path")
+                                      or inp.get("command") or "")
+                            print(f"  [{elapsed}] {block['name']} {str(detail).replace(str(ROOT) + '/', '')}"[:120],
+                                  flush=True)
+                            last_heartbeat = time.time()
+                elif msg.get("type") == "system" and msg.get("subtype") == "thinking_tokens":
+                    # Long stretches of thinking produce no tool calls; show a heartbeat so it doesn't look hung.
+                    if time.time() - last_heartbeat >= 20:
+                        print(f"  [{elapsed}] thinking… ~{msg.get('estimated_tokens', 0) / 1000:.0f}k tokens", flush=True)
+                        last_heartbeat = time.time()
+                elif msg.get("type") == "result":
+                    result = msg
+        proc.wait()
+    except KeyboardInterrupt:
+        proc.kill()
+        sys.exit("\nPlanning aborted.")
+    finally:
+        timer.cancel()
+    if result is None or result.get("is_error") or proc.returncode != 0:
+        reason = "timed out" if time.time() - start >= timeout else f"exit code {proc.returncode}"
+        detail = (result or {}).get("result") or "".join(other)[-1500:]
+        sys.exit(f"Planner failed ({reason}). See {log_path.relative_to(ROOT)}\n{detail}")
+    cost = result.get("total_cost_usd")
+    print(f"  done in {time.strftime('%M:%S', time.gmtime(time.time() - start))}"
+          + (f", ${cost:.2f}" if cost is not None else ""))
+    return result.get("result", "")
+
+
 def story_prefix(name: str) -> str:
-    """S02-shopping-list -> S02; shopping-list -> SHOPPING."""
-    m = re.match(r"([A-Za-z]+\d+)", name)
-    return (m.group(1) if m else re.split(r"[^A-Za-z0-9]", name)[0][:8] or "T").upper()
+    """S02-shopping-list -> S02; S-01-DB-Schema -> S01; shopping-list -> SHOPPING."""
+    m = re.match(r"([A-Za-z]+)-?(\d+)", name)
+    return (m.group(1) + m.group(2) if m else re.split(r"[^A-Za-z0-9]", name)[0][:8] or "T").upper()
 
 
 def cmd_load(file: str) -> None:

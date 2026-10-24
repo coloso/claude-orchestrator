@@ -3,8 +3,8 @@ PLAN ?= orchestration/plans/todo-tasks.json
 
 .PHONY: plan load demo dry-run status proposals approve reject retry run reset backend generate check up down logs mongo test-mongo
 
-plan:             ## make plan STORY=stories/S02-shopping-list.md -> orchestration/plans/S02-shopping-list.json (review it!)
-	$(ORCH) plan $(STORY)
+plan:             ## make plan STORY=S02-shopping-list (file in stories/) -> orchestration/plans/S02-shopping-list.json
+	$(ORCH) plan "$(STORY)"
 
 load:             ## make load PLAN=orchestration/plans/S02-shopping-list.json -> queue its tasks
 	$(ORCH) load $(PLAN)
