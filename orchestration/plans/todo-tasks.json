@@ -8,7 +8,9 @@
       "backend/api/**",
       "backend/internal/oas/**"
     ],
-    "depends_on": []
+    "depends_on": [],
+    "model": "sonnet",
+    "effort": "high"
   },
   {
     "id": "T-002",
@@ -20,7 +22,9 @@
       "backend/internal/todo/app/**",
       "backend/internal/todo/adapter/memory/**"
     ],
-    "depends_on": []
+    "depends_on": [],
+    "model": "sonnet",
+    "effort": "high"
   },
   {
     "id": "T-003",
@@ -30,7 +34,9 @@
     "scope": [
       "backend/internal/middleware/**"
     ],
-    "depends_on": []
+    "depends_on": [],
+    "model": "haiku",
+    "effort": "medium"
   },
   {
     "id": "T-004",
@@ -45,7 +51,9 @@
     "depends_on": [
       "T-001",
       "T-002"
-    ]
+    ],
+    "model": "sonnet",
+    "effort": "high"
   },
   {
     "id": "T-005",
@@ -57,7 +65,9 @@
     ],
     "depends_on": [
       "T-003"
-    ]
+    ],
+    "model": "haiku",
+    "effort": "low"
   },
   {
     "id": "T-006",
@@ -69,7 +79,9 @@
     ],
     "depends_on": [
       "T-004"
-    ]
+    ],
+    "model": "sonnet",
+    "effort": "high"
   },
   {
     "id": "T-007",
@@ -83,7 +95,9 @@
       "T-004",
       "T-005",
       "T-008"
-    ]
+    ],
+    "model": "haiku",
+    "effort": "medium"
   },
   {
     "id": "T-008",
@@ -99,7 +113,9 @@
     "depends_on": [
       "T-002",
       "T-004"
-    ]
+    ],
+    "model": "sonnet",
+    "effort": "high"
   },
   {
     "id": "T-009",
@@ -111,7 +127,9 @@
     ],
     "depends_on": [
       "T-001"
-    ]
+    ],
+    "model": "sonnet",
+    "effort": "high"
   },
   {
     "id": "T-010",
@@ -129,6 +147,8 @@
       "T-004",
       "T-005",
       "T-008"
-    ]
+    ],
+    "model": "opus",
+    "effort": "xhigh"
   }
 ]

@@ -9,7 +9,7 @@ You describe a feature as a **story**. A planner agent breaks it into tasks, and
 
 - [Quick start](#quick-start)
 - [Using the orchestrator](#using-the-orchestrator): commands, workflow, worked example
-- [How it works](#how-it-works): layout, task lifecycle, quality gate, roles
+- [How it works](#how-it-works): layout, task lifecycle, quality gate, roles, models, MCP servers
 - [Backend architecture](#backend-architecture)
 - [Running the app](#running-the-app)
 - [Tuning](#tuning)
@@ -300,6 +300,45 @@ Agents run `backend/check.sh` themselves before finishing, so most failures are 
 
 Authentication and authorization are out of scope for the demo. Security reviews record them once as an accepted risk.
 
+### Models
+
+The orchestrator chooses the model for each agent:
+
+| Who | Model | How it's chosen |
+|---|---|---|
+| Planner | Claude Opus 5.5 (`claude-opus-5-5`, effort `xhigh`) | Always. One call per story, and the plan's quality decides everything after it |
+| Workers | Claude Haiku 5.5 (`claude-haiku-5-5`), Claude Sonnet 5.5 (`claude-sonnet-5-5`) or Claude Opus 5.5 (`claude-opus-5-5`) | The planner sets `"model"` (`haiku`, `sonnet`, `opus`) and `"effort"` (`low`, `medium`, `high`, `xhigh`) on every task |
+
+- **`haiku`:** mechanical, fully specified tasks, such as wiring per exact instructions, docs from code, or small fixes. It costs about a twentieth of Sonnet.
+- **`sonnet`:** anything that needs judgment, such as spec design, the DDD model written test-first, adapters with real logic, e2e tests, or security reviews. Most tasks use it, and a task without a model gets it.
+- **`opus`:** the few tasks per story where depth of reasoning decides the outcome, at about twice Sonnet's price. Examples: a domain model with many interacting invariants, tricky concurrency or consistency logic, cross-context changes, an end-to-end threat model. In the demo plan, that's T-010, the hardening review.
+- **Effort:** the planner always chooses one.
+  - `low` for trivial edits, and `medium` for well-specified routine work;
+  - `high` for normal engineering with design decisions;
+  - `xhigh` only when a subtle mistake would be costly (T-010 runs `opus/xhigh`).
+
+  Typical pairings are `haiku/medium`, `sonnet/high` and `opus/high`. If a plan omits an effort, `load` fills in the model's default, so the queue never relies on implicit CLI defaults.
+- **Escalation:** a task that fails is retried one tier up, `haiku` → `sonnet` → `opus` (`escalate_on_retry`). Once on `opus`, a retry raises the effort instead, for example `high` → `xhigh`.
+- **Overrides:** a plan file is plain JSON, so you can change any task's model before `make load`. Proposals carry a model too, which you see in `make proposals`.
+- **Guardrails:** workers can only use the aliases in `models.workers`, so a plan or proposal asking for anything else is rejected. Any configured model ID containing a word from `models.forbidden` (`fable`, `mythos`) stops the orchestrator before it starts.
+
+`make status`, the dashboard and `.orch/events.jsonl` show which model ran each task, and the event log notes escalations.
+
+### MCP servers
+
+Each role gets only the MCP servers it needs. Agents run with `--strict-mcp-config`, so your personal MCP setup (IDE, docs connectors, …) never reaches them.
+
+| Server | What agents use it for | Roles |
+|---|---|---|
+| **gopls** (v0.23.0, `gopls mcp`) | Go symbol search, references, package APIs, diagnostics, instead of grepping generated code | backend, tests, security |
+| **Context7** (`@upstash/context7-mcp@4.3.0`) | Current docs for ogen, mongo-driver v2 and other libraries | api, backend |
+| **MongoDB**, read-only (`mongodb-mcp-server@3.0.5`) | Inspect collections, documents, indexes and query plans | backend, security |
+
+- **gopls** is built once into `.orch/bin` on the first `make run`.
+- **MongoDB** starts only when `MONGO_TEST_URI` is set (`make mongo && export MONGO_TEST_URI=mongodb://localhost:27017`). It runs with `MDB_MCP_READ_ONLY=true`, telemetry disabled, and the `connect`/`export`/Atlas tools disabled, so agents can only read the configured local server.
+- **Context7** works without a key; export `CONTEXT7_API_KEY` for higher rate limits.
+- **Configuration:** servers are defined under `mcp_servers` in `config.json`, and assigned to roles under `mcp`. Placeholders: `{root}`, `{orch}`, `{env:NAME}`.
+
 ## Backend architecture
 
 Every feature is a **bounded context** in `backend/internal/<context>/`, built as a hexagon:
@@ -335,8 +374,9 @@ Configuration (environment): `PORT` (8000), `STORAGE` (`memory` or `mongo`), `MO
 ## Tuning
 
 - `orchestration/config.json`:
-  - `max_workers`, `max_attempts`;
-  - `agent.model`, `agent.timeout_s`, and `planner.model`;
+  - `max_workers`, `max_attempts`, `agent.timeout_s`;
+  - `models`: planner model, worker models (aliases → IDs, optional `effort`), default, escalation, forbidden words;
+  - `mcp_servers` and `mcp`: MCP servers and which roles get them;
   - `agent.allowed_tools`: agents run with `--permission-mode acceptEdits`, and Bash access is limited to `check.sh` and the `go`/`npm` commands listed there;
   - `require_tests_for`: the TDD rule;
   - `gates`: per-area gate commands. The `frontend` gate (`npm run typecheck && npm test`) is ready for when the Vue app exists.

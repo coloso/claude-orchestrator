@@ -14,7 +14,9 @@ Read the repo (CLAUDE.md, backend/, frontend/, existing stories in stories/) to 
     "title": "Short imperative title",
     "prompt": "Detailed instructions the worker needs, including any API contracts it must follow.",
     "scope": ["backend/app/**"],
-    "depends_on": []
+    "depends_on": [],
+    "model": "sonnet",
+    "effort": "high"
   }
 ]
 ```
@@ -36,6 +38,31 @@ Rules:
   - Authentication and authorization are out of scope.
 - Describe the domain in each model task: the aggregate, its value objects and invariants, its behaviors (named in the domain's language), and the domain errors. Describe the same use cases in the HTTP task, so both sides agree.
 - Spell out shared contracts in every task that relies on them, so parallel tasks agree without seeing each other's code. That means operation IDs, schema names and fields, the `app.UseCases` method signatures, the domain error names, and which status code each error maps to.
+- **Pick a `model` for every task:** one of the available worker models given in the request. Choose the cheapest model that will get the task right the first time; a failed attempt costs more than the model difference. Most tasks should be `sonnet`.
+  - **`haiku`** (fast, about 20× cheaper): the task is mechanical and fully specified, so the prompt leaves no design decisions. Examples: wiring an existing adapter into `handler`/`bootstrap` exactly as described; middleware with an exact spec; documentation written from existing code; un-skipping a security test after a one-line fix; small config or infrastructure edits.
+  - **`sonnet`**: anything that needs judgment. That includes:
+    - designing the OpenAPI spec;
+    - the DDD model and use cases written test-first;
+    - adapters with real mapping or concurrency logic (MongoDB, optimistic locking);
+    - e2e tests derived from acceptance criteria;
+    - security reviews;
+    - anything ambiguous or cross-cutting.
+  - **`opus`** (about 2× the price of `sonnet`): only for the few tasks where depth of reasoning decides the outcome, typically 0–2 per story. Examples:
+    - a domain model with many interacting invariants;
+    - concurrency or consistency logic that is easy to get subtly wrong;
+    - a cross-cutting change that touches several bounded contexts' contracts;
+    - an end-to-end threat model of a whole feature.
+  - **When unsure, use `sonnet`.** Failed tasks escalate automatically on retry: `haiku` → `sonnet` → `opus`, then to a higher effort.
+- **Set `effort` for every task** (one of the available efforts). Effort is how much the model thinks before and between actions; it multiplies cost, so match it to the task, not to its importance:
+
+  | Effort | Use for |
+  |---|---|
+  | `low` | Trivial, mechanical edits: a rename, un-skipping one test, a one-line config change (usually `haiku`) |
+  | `medium` | Well-specified routine work: wiring per instructions, docs from code, middleware with an exact spec (the usual `haiku` setting) |
+  | `high` | Normal engineering with design decisions: spec design, test-first domain modeling, adapters, e2e tests, reviews (the usual `sonnet` and `opus` setting) |
+  | `xhigh` | Genuinely hard tasks where a subtle mistake is costly: interacting invariants, concurrency or consistency logic, cross-context changes, a threat model of a whole feature (usually with `opus`) |
+
+  Typical pairings are `haiku`/`medium`, `sonnet`/`high` and `opus`/`high` or `xhigh`; deviate when the task calls for it.
 - Use the task IDs you are given (e.g. `S02-01`, `S02-02`, ...).
 - Carry the story's **domain notes** into the model task. Use its terms, rules and bounded context verbatim, so the ubiquitous language survives into the code.
 - Every **acceptance criterion** must be covered by an e2e test task. Quote the criteria in that task's prompt.

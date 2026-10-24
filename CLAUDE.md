@@ -59,7 +59,7 @@ Other folders:
   - It also requires at least 80% coverage in those layers.
 - Before finishing, run `backend/check.sh`: generate drift check, gofmt, vet, tests (including archtest), coverage, gosec and govulncheck. It must pass.
 - **Work outside your scope:** don't do it. Propose it instead.
-  - Write a JSON array of follow-up tasks to `.orch-proposals.json` at the worktree root. Each entry has `title`, `role`, `prompt` and `scope`, plus optional `depends_on`, `severity` and `rationale`.
+  - Write a JSON array of follow-up tasks to `.orch-proposals.json` at the worktree root. Each entry has `title`, `role`, `prompt` and `scope`, plus optional `depends_on`, `model` (`haiku`, `sonnet` or `opus`), `effort` (`low` … `xhigh`), `severity` and `rationale`.
   - The file is never committed. A human reviews the proposals and approves or rejects them.
 
 ## How a feature flows

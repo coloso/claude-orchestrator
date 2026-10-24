@@ -96,6 +96,8 @@ def propose(source: dict, proposals: list) -> tuple:
         task = {k: p[k] for k in PROPOSAL_FIELDS}
         task.update(
             id=f"{source['id']}.{n}",
+            model=p.get("model"),
+            effort=p.get("effort"),
             depends_on=list(p.get("depends_on", [])),
             proposed_by=source["id"],
             severity=p.get("severity"),

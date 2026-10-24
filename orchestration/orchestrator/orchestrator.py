@@ -24,10 +24,11 @@ import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import mcp
 import tasks
 import worktrees
-from common import (AGENTS_DIR, EVENTS_FILE, ORCH, ROLES_DIR, ROOT, STATE_FILE, STATUSES,
-                    STOP_FILE, WORKTREES, emit, ensure_dirs, git, load_config, sh)
+from common import (AGENTS_DIR, EVENTS_FILE, MCP_DIR, ORCH, ROLES_DIR, ROOT, STATE_FILE, STATUSES,
+                    STOP_FILE, WORKTREES, emit, ensure_dirs, git, load_config, model_args, sh, tool_env)
 
 
 # ---------------------------------------------------------------- planning
@@ -49,17 +50,22 @@ def cmd_plan(source: str, out: str, prefix: str) -> None:
     prompt = (
         f"Story:\n\n{story}\n\n"
         f"Available worker roles: {', '.join(roles)}\n"
+        f"Available worker models: {', '.join(config['models']['workers'])}\n"
+        f"Available efforts: {', '.join(config['models']['efforts'])}\n"
         f"Use task IDs {prefix}-01, {prefix}-02, ... in order.\n\n"
         "Return the task list as JSON."
     )
-    print(f"Planning with Claude ({config['planner']['model']})...")
+    print(f"Planning with Claude ({config['models']['planner']['id']})...")
+    ensure_dirs()
+    servers, _ = mcp.servers_for("planner", config)
     result = sh([
         "claude", "-p", prompt,
         "--append-system-prompt", (ROLES_DIR / "planner.md").read_text(),
-        "--model", config["planner"]["model"],
-        "--allowedTools", *config["planner"]["allowed_tools"],
+        *model_args(config["models"]["planner"]),
+        "--allowedTools", *config["planner"]["allowed_tools"], *mcp.allowed_tools(servers),
+        *mcp.claude_args(MCP_DIR / "planner.json", servers),
         "--output-format", "json",
-    ], check=False, stdin=subprocess.DEVNULL)
+    ], check=False, stdin=subprocess.DEVNULL, env=tool_env())
     if result.returncode != 0:
         sys.exit(f"planner failed:\n{result.stdout}\n{result.stderr}")
     text = json.loads(result.stdout)["result"]
@@ -67,7 +73,7 @@ def cmd_plan(source: str, out: str, prefix: str) -> None:
     if not match:
         sys.exit(f"planner returned no JSON array:\n{text}")
     plan = json.loads(match.group(0))
-    validate_plan(plan)
+    validate_plan(plan, config=config)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(plan, indent=2, ensure_ascii=False) + "\n")
     rel = out_path.relative_to(ROOT)
@@ -87,7 +93,9 @@ def cmd_load(file: str) -> None:
     load_plan(json.loads((ROOT / file).read_text()))
 
 
-def validate_plan(plan: list, existing: set = frozenset()) -> None:
+def validate_plan(plan: list, existing: set = frozenset(), config: dict = None) -> None:
+    models = (config or load_config())["models"]
+    workers = models["workers"]
     ids = [t["id"] for t in plan]
     dupes = sorted({i for i in ids if ids.count(i) > 1} | (set(ids) & existing))
     if dupes:
@@ -98,16 +106,26 @@ def validate_plan(plan: list, existing: set = frozenset()) -> None:
             sys.exit(f"{t['id']} depends on unknown task(s) {missing}")
         if not (ROLES_DIR / f"{t['role']}.md").exists():
             sys.exit(f"{t['id']} has unknown role '{t['role']}'")
+        if t.get("model") and t["model"] not in workers:
+            sys.exit(f"{t['id']} asks for model '{t['model']}'; worker models are {sorted(workers)}")
+        if t.get("effort") and t["effort"] not in models["efforts"]:
+            sys.exit(f"{t['id']} asks for effort '{t['effort']}'; efforts are {models['efforts']}")
 
 
 def print_plan(plan: list) -> None:
     for t in plan:
         deps = f"  (after {', '.join(t['depends_on'])})" if t.get("depends_on") else ""
-        print(f"  {t['id']:<9}[{t['role']}]  {t['title']}{deps}")
+        model = f"  <{'/'.join(filter(None, [t.get('model'), t.get('effort')]))}>" if t.get("model") or t.get("effort") else ""
+        print(f"  {t['id']:<9}[{t['role']}]{model}  {t['title']}{deps}")
 
 
 def load_plan(plan: list) -> None:
-    validate_plan(plan, set(tasks.all_tasks()))
+    config = load_config()
+    validate_plan(plan, set(tasks.all_tasks()), config)
+    models = config["models"]
+    for t in plan:  # make the orchestrator's choice explicit in the queue: no implicit CLI defaults
+        t["model"] = t.get("model") or models["default_worker"]
+        t["effort"] = t.get("effort") or models["workers"][t["model"]]["effort"]
     for t in plan:
         tasks.add(t)
         emit("task_added", task=t["id"], detail=t["title"])
@@ -121,6 +139,8 @@ def cmd_run(n_workers: int, fake: bool, only: list) -> None:
     config = load_config()
     ensure_dirs()
     config["base_branch"] = preflight()
+    if not fake:
+        mcp.prepare(config)
     if only:
         unknown = [tid for tid in only if tid not in tasks.all_tasks()]
         if unknown:
@@ -228,8 +248,8 @@ def write_state() -> None:
     task_rows = []
     for tid, (status, t) in sorted(tasks.all_tasks().items()):
         task_rows.append({**{k: t.get(k) for k in
-                             ("id", "title", "role", "depends_on", "scope", "agent", "attempts", "error",
-                              "severity", "proposed_by")},
+                             ("id", "title", "role", "model", "effort", "depends_on", "scope", "agent", "attempts",
+                              "error", "severity", "proposed_by")},
                           "status": status})
     cost = sum(e.get("cost_usd") or 0 for e in events if e["kind"] == "agent_result")
     STATE_FILE.write_text(json.dumps({
@@ -270,7 +290,9 @@ def cmd_proposals() -> None:
     for t in proposed:
         sev = f"[{t['severity']}] " if t.get("severity") else ""
         deps = f"  (after {', '.join(t['depends_on'])})" if t.get("depends_on") else ""
-        print(f"{t['id']}  {sev}{t['title']}  — role {t['role']}, from {t['proposed_by']}{deps}")
+        print(f"{t['id']}  {sev}{t['title']}  — role {t['role']}, model {t.get('model') or 'default'}"
+              f"{'/' + t['effort'] if t.get('effort') else ''}, "
+              f"from {t['proposed_by']}{deps}")
         if t.get("rationale"):
             print(f"    why:   {t['rationale']}")
         print(f"    scope: {', '.join(t['scope'])}")
@@ -281,6 +303,7 @@ def cmd_proposals() -> None:
 
 def cmd_decide(ids: list, approve: bool) -> None:
     known = tasks.all_tasks()
+    approved = 0
     for tid in ids:
         status, t = known.get(tid, (None, None))
         if status != "proposed":
@@ -288,17 +311,22 @@ def cmd_decide(ids: list, approve: bool) -> None:
             continue
         if approve:
             missing = [d for d in t.get("depends_on", []) if d not in known]
-            if missing or not (ROLES_DIR / f"{t['role']}.md").exists():
-                print(f"{tid}: cannot approve (unknown role '{t['role']}' or dependencies {missing})")
+            models = load_config()["models"]
+            if (missing or not (ROLES_DIR / f"{t['role']}.md").exists()
+                    or (t.get("model") and t["model"] not in models["workers"])
+                    or (t.get("effort") and t["effort"] not in models["efforts"])):
+                print(f"{tid}: cannot approve (role '{t['role']}', model '{t.get('model')}', "
+                      f"effort '{t.get('effort')}', unknown deps {missing})")
                 continue
             tasks.move(tid, "proposed", "pending")
+            approved += 1
             emit("task_approved", task=tid)
             print(f"{tid}: approved, queued as pending")
         else:
             tasks.move(tid, "proposed", "rejected")
             emit("task_rejected", task=tid)
             print(f"{tid}: rejected")
-    if approve:
+    if approved:
         print("Start (or keep) `orchestrator.py run` to work on approved tasks.")
 
 
@@ -321,11 +349,12 @@ def print_status() -> None:
     if not rows:
         print("No tasks. Use `plan` or `load` first.")
         return
-    print(f"\n{'ID':<9}{'STATUS':<10}{'ROLE':<10}{'AGENT':<9}TITLE")
+    print(f"\n{'ID':<9}{'STATUS':<10}{'ROLE':<10}{'MODEL':<13}{'AGENT':<9}TITLE")
     for tid, (status, t) in sorted(rows.items()):
-        print(f"{tid:<9}{status:<10}{t['role']:<10}{t.get('agent') or '-':<9}{t['title']}")
+        model = "/".join(filter(None, [t.get("model"), t.get("effort")])) or "-"
+        print(f"{tid:<9}{status:<10}{t['role']:<10}{model:<13}{t.get('agent') or '-':<9}{t['title']}")
         if status == "failed" and t.get("error"):
-            print(f"{'':<19}error: {t['error'].splitlines()[0][:100]}")
+            print(f"{'':<32}error: {t['error'].splitlines()[0][:100]}")
     counts = {s: sum(1 for st, _ in rows.values() if st == s) for s in STATUSES}
     print("\n" + "  ".join(f"{s}={n}" for s, n in counts.items() if n))
 

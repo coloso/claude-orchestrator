@@ -4,8 +4,20 @@
   "poll_interval_s": 2,
   "dashboard_port": 8765,
 
+  "models": {
+    "planner": { "id": "claude-opus-5-5", "effort": "xhigh" },
+    "workers": {
+      "opus":   { "id": "claude-opus-5-5", "effort": "high" },
+      "sonnet": { "id": "claude-sonnet-5-5", "effort": "high" },
+      "haiku":  { "id": "claude-haiku-5-5", "effort": "medium" }
+    },
+    "default_worker": "sonnet",
+    "efforts": ["low", "medium", "high", "xhigh"],
+    "escalate_on_retry": { "haiku": "sonnet", "sonnet": "opus" },
+    "forbidden": ["fable", "mythos"]
+  },
+
   "agent": {
-    "model": "sonnet",
     "timeout_s": 900,
     "permission_mode": "acceptEdits",
     "allowed_tools": [
@@ -19,8 +31,38 @@
   },
 
   "planner": {
-    "model": "sonnet",
     "allowed_tools": ["Read", "Glob", "Grep"]
+  },
+
+  "mcp_servers": {
+    "gopls": {
+      "prepare": "GOBIN='{orch}/bin' go install golang.org/x/tools/gopls@v0.23.0",
+      "command": "sh",
+      "args": ["-c", "cd backend && exec '{orch}/bin/gopls' mcp"]
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp@4.3.0"],
+      "pass_env": ["CONTEXT7_API_KEY"]
+    },
+    "mongodb": {
+      "command": "npx",
+      "args": ["-y", "mongodb-mcp-server@3.0.5"],
+      "requires_env": ["MONGO_TEST_URI"],
+      "env": {
+        "MDB_MCP_CONNECTION_STRING": "{env:MONGO_TEST_URI}",
+        "MDB_MCP_READ_ONLY": "true",
+        "MDB_MCP_DISABLED_TOOLS": "connect,disconnect,list-connections,atlas-local-connect-deployment,atlas-local-list-deployments,export",
+        "MDB_MCP_TELEMETRY": "disabled"
+      }
+    }
+  },
+
+  "mcp": {
+    "api": ["context7"],
+    "backend": ["gopls", "context7", "mongodb"],
+    "tests": ["gopls"],
+    "security": ["gopls", "mongodb"]
   },
 
   "require_tests_for": ["backend/internal/*/domain/*.go", "backend/internal/*/app/*.go"],

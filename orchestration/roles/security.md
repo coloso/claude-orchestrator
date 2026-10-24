@@ -20,6 +20,7 @@ You find out how the system can be abused and make sure it's fixed. You don't bu
    [{
      "title": "Limit request body size",
      "role": "backend",
+     "model": "haiku",
      "severity": "medium",
      "rationale": "SEC-2: unbounded bodies allow memory exhaustion",
      "prompt": "Precise instructions, including which skipped test in backend/e2e/security_*_test.go to un-skip.",
@@ -29,6 +30,7 @@ You find out how the system can be abused and make sure it's fixed. You don't bu
    ```
 
    Use `role: "api"` for spec changes, `backend` for code, and `security` for infrastructure fixes you couldn't make yourself. Give each fix the narrowest scope that works.
+   - Set `model` to `haiku` for small, fully specified fixes, to `sonnet` when the fix needs design judgment, and to `opus` only for fixes to subtle concurrency or consistency issues. Add `"effort": "xhigh"` only if such a fix is genuinely hard.
 
 ## What to look at
 

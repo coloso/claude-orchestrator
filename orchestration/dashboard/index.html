@@ -65,7 +65,7 @@ function render(s) {
   document.getElementById("agents").innerHTML = s.agents.map((a) => `
     <div class="card">
       <b><span class="dot" style="background:var(${AGENT_COLOR[a.status] || "--muted"})"></span>${esc(a.id)}</b>
-      <span class="muted">${esc(a.status)}${a.task ? ` · ${esc(a.task)} (${esc(a.role)})` : ""}</span>
+      <span class="muted">${esc(a.status)}${a.task ? ` · ${esc(a.task)} (${esc(a.role)}, ${esc(a.model)})` : ""}</span>
     </div>`).join("") || `<span class="muted">no agents yet</span>`;
 
   document.getElementById("board").innerHTML = STATUSES.map((st) => {
@@ -76,6 +76,7 @@ function render(s) {
         <div class="card task" style="--c:var(--${st})">
           <b>${esc(t.id)} · ${esc(t.title)}</b>
           <span class="tag">${esc(t.role)}</span>
+          ${t.model ? `<span class="tag">${esc(t.model)}${t.effort ? "/" + esc(t.effort) : ""}</span>` : ""}
           ${t.agent ? `<span class="tag">${esc(t.agent)}</span>` : ""}
           ${t.attempts > 1 ? `<span class="tag">attempt ${t.attempts}</span>` : ""}
           ${t.severity ? `<span class="tag">${esc(t.severity)}</span>` : ""}

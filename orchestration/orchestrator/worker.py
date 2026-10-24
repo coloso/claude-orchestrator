@@ -11,10 +11,12 @@ import threading
 import time
 from pathlib import Path
 
+import mcp
 import quality_gate
 import tasks
 import worktrees
-from common import AGENTS_DIR, LOGS_DIR, PROPOSALS_FILE, ROLES_DIR, STOP_FILE, emit, load_config, tool_env
+from common import (AGENTS_DIR, LOGS_DIR, MCP_DIR, PROPOSALS_FILE, ROLES_DIR, STOP_FILE, emit, load_config,
+                    model_args, tool_env, worker_model)
 
 
 class Worker:
@@ -30,6 +32,7 @@ class Worker:
             "id": self.id, "status": status, "updated": time.time(),
             "task": task["id"] if task else None,
             "role": task["role"] if task else None,
+            "model": worker_model(task, self.config)[0] if task else None,
         }))
 
     def loop(self) -> None:
@@ -103,15 +106,25 @@ class Worker:
     def claude_agent(self, task: dict, wt: Path) -> None:
         agent_cfg = self.config["agent"]
         role_prompt = (ROLES_DIR / f"{task['role']}.md").read_text()
+        attempt = f"{task['id']}.attempt{task['attempts']}"
+        alias, model = worker_model(task, self.config)
+        first = worker_model({**task, "attempts": 1}, self.config)
+        emit("model", agent=self.id, task=task["id"],
+             detail=f"{alias} ({model['id']}), effort {model['effort'] or 'default'}"
+             + (" escalated after a failed attempt" if (alias, model) != first else ""))
+        servers, skipped = mcp.servers_for(task["role"], self.config)
+        emit("mcp", agent=self.id, task=task["id"],
+             detail=f"servers: {', '.join(servers) or 'none'}" + (f"; skipped {', '.join(skipped)}" if skipped else ""))
         cmd = [
             "claude", "-p", self.build_prompt(task),
             "--append-system-prompt", role_prompt,
-            "--model", agent_cfg["model"],
+            *model_args(model),
             "--permission-mode", agent_cfg["permission_mode"],
-            "--allowedTools", *agent_cfg["allowed_tools"],
+            "--allowedTools", *agent_cfg["allowed_tools"], *mcp.allowed_tools(servers),
+            *mcp.claude_args(MCP_DIR / f"{attempt}.json", servers),
             "--output-format", "stream-json", "--verbose",
         ]
-        log_path = LOGS_DIR / f"{task['id']}.attempt{task['attempts']}.jsonl"
+        log_path = LOGS_DIR / f"{attempt}.jsonl"
         proc = subprocess.Popen(cmd, cwd=wt, env=tool_env(), text=True,
                                 stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
