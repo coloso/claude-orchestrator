@@ -1,6 +1,8 @@
 {
-  "max_workers": 4,
+  "max_workers": 10,
   "max_attempts": 2,
+  "merge_into_base": true,
+  "auto_decide": { "medium": "approve", "low": "park" },
   "poll_interval_s": 2,
   "dashboard_port": 8765,
 

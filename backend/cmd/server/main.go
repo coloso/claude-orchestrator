@@ -27,10 +27,15 @@ func main() {
 		slog.Error("invalid configuration", "err", err)
 		os.Exit(1)
 	}
+	host, err := listenHostFromEnv()
+	if err != nil {
+		slog.Error("invalid configuration", "err", err)
+		os.Exit(1)
+	}
 	if *healthcheck {
 		os.Exit(checkHealth(port))
 	}
-	if err := run(fmt.Sprintf(":%d", port)); err != nil {
+	if err := run(listenAddr(host, port)); err != nil {
 		slog.Error("server stopped", "err", err)
 		os.Exit(1)
 	}
@@ -45,7 +50,7 @@ func run(addr string) error {
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{Addr: addr, Handler: app.Handler, ReadHeaderTimeout: 5 * time.Second}
+	srv := newHTTPServer(addr, app.Handler)
 
 	errc := make(chan error, 1)
 	go func() {
@@ -68,6 +73,20 @@ func run(addr string) error {
 	return errors.Join(err, app.Close(shutdownCtx))
 }
 
+// newHTTPServer sets timeouts so slow or idle clients can't hold connections open forever,
+// and caps request headers at 16 KiB.
+func newHTTPServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+	}
+}
+
 // portFromEnv reads PORT (default 8000) and rejects anything that is not a port number.
 func portFromEnv() (int, error) {
 	v := os.Getenv("PORT")
@@ -79,6 +98,23 @@ func portFromEnv() (int, error) {
 		return 0, fmt.Errorf("PORT must be a number between 1 and 65535, got %q", v)
 	}
 	return port, nil
+}
+
+// listenHostFromEnv reads LISTEN_HOST (default 127.0.0.1) and rejects anything that is not an IP address.
+func listenHostFromEnv() (string, error) {
+	v := os.Getenv("LISTEN_HOST")
+	if v == "" {
+		return "127.0.0.1", nil
+	}
+	if net.ParseIP(v) == nil {
+		return "", fmt.Errorf("LISTEN_HOST must be an IP address, got %q", v)
+	}
+	return v, nil
+}
+
+// listenAddr joins host and port, bracketing IPv6 hosts ("[::1]:8000").
+func listenAddr(host string, port int) string {
+	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 // checkHealth queries the local server only; the port is the sole variable part.

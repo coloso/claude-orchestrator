@@ -9,7 +9,8 @@
     python3 orchestration/orchestrator/orchestrator.py review                 # decide them one by one, interactively
     python3 orchestration/orchestrator/orchestrator.py approve T-010.1 [...]  # queue them (then `run`)
     python3 orchestration/orchestrator/orchestrator.py reject T-010.2 [...]
-    python3 orchestration/orchestrator/orchestrator.py retry T-004 [...]      # failed -> pending, attempts reset
+    python3 orchestration/orchestrator/orchestrator.py retry [T-004 ...] [--run]  # failed -> pending, attempts reset
+                                                                              # (no IDs: every failed task of this branch's stories)
     python3 orchestration/orchestrator/orchestrator.py reset
 """
 from __future__ import annotations
@@ -338,7 +339,10 @@ def cmd_dashboard() -> None:
     print("Ctrl-C to stop.")
     try:
         while True:
-            write_state()
+            try:
+                write_state()
+            except OSError as e:  # e.g. a task file moved by a running worker mid-scan; next tick catches up
+                print(f"(state not refreshed this tick: {e})", flush=True)
             if not serving:
                 serving = start_dashboard(config["dashboard_port"], quiet=True)
             time.sleep(1)
@@ -534,19 +538,16 @@ def cmd_decide(ids: list, approve: bool) -> None:
     approved = 0
     for tid in ids:
         status, t = known.get(tid, (None, None))
-        if status != "proposed":
+        parked = status == "rejected" and t.get("parked")
+        if status != "proposed" and not (approve and parked):
             print(f"{tid}: not a waiting proposal (status: {status or 'unknown'})")
             continue
         if approve:
-            missing = [d for d in t.get("depends_on", []) if d not in known]
-            models = load_config()["models"]
-            if (missing or t["role"] in NON_WORKER_ROLES or not (ROLES_DIR / f"{t['role']}.md").exists()
-                    or (t.get("model") and t["model"] not in models["workers"])
-                    or (t.get("effort") and t["effort"] not in models["efforts"])):
-                print(f"{tid}: cannot approve (role '{t['role']}', model '{t.get('model')}', "
-                      f"effort '{t.get('effort')}', unknown deps {missing})")
+            problem = tasks.approval_problem(t, known, load_config())
+            if problem:
+                print(f"{tid}: cannot approve ({problem})")
                 continue
-            tasks.move(tid, "proposed", "pending")
+            tasks.move(tid, status, "pending", parked=None)
             approved += 1
             emit("task_approved", task=tid)
             print(f"{tid}: approved, queued as pending")
@@ -558,8 +559,18 @@ def cmd_decide(ids: list, approve: bool) -> None:
         print("Start (or keep) `orchestrator.py run` to work on approved tasks.")
 
 
-def cmd_retry(ids: list) -> None:
+def cmd_retry(ids: list, run: bool = False) -> None:
+    """Requeue failed tasks; with `run`, start a run limited to the plans they belong to."""
     known = tasks.all_tasks()
+    if not ids:
+        branch = git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        plans = stories.plans_based_on(branch)
+        ids = sorted(tid for tid, (status, t) in known.items() if status == "failed" and stories.plan_of(t) in plans)
+        if not ids:
+            print(f"No failed tasks in the stories started from '{branch}'"
+                  f"{' (' + ', '.join(sorted(plans)) + ')' if plans else ''}. Name them with IDS=... to retry others.")
+            return
+    retried = []
     for tid in ids:
         status, _ = known.get(tid, (None, None))
         if status != "failed":
@@ -568,6 +579,14 @@ def cmd_retry(ids: list) -> None:
         tasks.move(tid, "failed", "pending", attempts=0)
         emit("task_requeued", task=tid, detail="manual retry")
         print(f"{tid}: queued again with fresh attempts")
+        retried.append(tid)
+    if run and retried:
+        # The retried tasks plus everything still pending in their plans (e.g. tasks they block).
+        plans = {stories.plan_of(known[tid][1]) for tid in retried}
+        only = sorted(tid for tid, (status, t) in tasks.all_tasks().items()
+                      if status == "pending" and stories.plan_of(t) in plans)
+        print(f"Starting a run for {', '.join(sorted(plans))} ({len(only)} task(s)) ...")
+        cmd_run(load_config()["max_workers"], False, only)
 
 
 # ---------------------------------------------------------------- status / reset
@@ -617,7 +636,9 @@ def main() -> None:
     sub.add_parser("review", help="decide the waiting proposals one by one, interactively")
     sub.add_parser("approve").add_argument("ids", nargs="+")
     sub.add_parser("reject").add_argument("ids", nargs="+")
-    sub.add_parser("retry", help="put failed tasks back in the queue").add_argument("ids", nargs="+")
+    retry = sub.add_parser("retry", help="put failed tasks back in the queue (no IDs: all failed tasks of this branch)")
+    retry.add_argument("ids", nargs="*")
+    retry.add_argument("--run", action="store_true", help="then start a run for the plans of the retried tasks")
     sub.add_parser("reset")
     args = ap.parse_args()
 
@@ -638,7 +659,7 @@ def main() -> None:
     elif args.cmd in ("approve", "reject"):
         cmd_decide(args.ids, approve=args.cmd == "approve")
     elif args.cmd == "retry":
-        cmd_retry(args.ids)
+        cmd_retry(args.ids, args.run)
     elif args.cmd == "reset":
         cmd_reset()
 

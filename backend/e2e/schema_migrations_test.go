@@ -80,7 +80,7 @@ func migrationTestDB(t *testing.T) (db *mongo.Database, uri string) {
 
 // migrationNewApp builds the application on the given database with STORAGE=mongo.
 func migrationNewApp(ctx context.Context, uri, dbName string) (*bootstrap.App, error) {
-	return bootstrap.New(ctx, bootstrap.Config{Storage: bootstrap.StorageMongo, MongoURI: uri, MongoDB: dbName})
+	return bootstrap.New(ctx, bootstrap.Config{Storage: bootstrap.StorageMongo, MongoURI: uri, MongoDB: dbName, RateLimit: generousLimits()})
 }
 
 // migrationServe serves app with httptest and returns a generated client. The server and the app

@@ -54,7 +54,9 @@ def write_state() -> None:
         "events": events[-150:],
     }
     state["hints"] = _hints(state)
-    tmp = STATE_FILE.with_suffix(".tmp")
+    # Per-process temp file: `make dashboard` and `make run` both write the state, and a shared
+    # temp file would be renamed away by one of them while the other still needs it.
+    tmp = STATE_FILE.with_suffix(f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(state))
     tmp.replace(STATE_FILE)  # atomic: the dashboard never reads a half-written file
 
@@ -107,8 +109,10 @@ def _task_row(tid: str, status: str, t: dict, events: list) -> dict:
     started = claimed[-1] if claimed else None
     finished = done[-1] if done else None
     return {
-        **{k: t.get(k) for k in ("id", "plan", "title", "role", "model", "effort", "depends_on", "scope", "agent",
-                                 "attempts", "error", "severity", "proposed_by", "rationale", "prompt")},
+        **{k: t.get(k) for k in ("id", "title", "role", "model", "effort", "depends_on", "scope", "agent",
+                                 "attempts", "error", "severity", "proposed_by", "rationale", "prompt",
+                                 "parked", "auto_approved")},
+        "plan": stories.plan_of(t),  # resolved, so the dashboard can group tasks by story branch
         "status": status,
         "started": started,
         "duration_s": round((finished or time.time()) - started) if started and status != "failed" else None,
@@ -202,6 +206,8 @@ def _stories_info(rows: list) -> list:
             "pr_branch": rec.get("pr_branch"),
             "pr_commit": rec.get("pr_commit"),
             "pr_title": rec.get("pr_title"),
+            "merged_into": rec.get("merged_into"),
+            "merge_skipped": rec.get("merge_skipped"),
         })
     return out
 
@@ -239,12 +245,17 @@ def _hints(s: dict) -> list:
             verdict = {"approve": " The lead engineer approved it.",
                        "changes_requested": " The lead engineer requested changes (see the story card).",
                        "error": " The lead review failed (see the story card)."}.get(lead.get("verdict"), "")
-            where = (f"squashed into one commit on {st['pr_branch']}" if st["pr_commit"]
+            where = (f"merged onto {st['merged_into']} as one commit" if st["merged_into"]
+                     else f"squashed into one commit on {st['pr_branch']}" if st["pr_commit"]
                      else f"on branch {st['branch']}")
+            todo = ("Push it when you're happy with it." if st["merged_into"]
+                    else f"It was not merged automatically ({st['merge_skipped']}). Review it and push it yourself."
+                    if st["merge_skipped"] else "Review it and push it yourself.")
             good = (st["ok"] or not st["checked"]) and lead.get("verdict") in (None, "approve")
             add("ok" if good else "warn",
                 f"Story {st['plan']} is ready, {where}: {st['commits']} task commits, "
-                f"{st['files']} files, {checks}.{verdict} Review it and push it yourself.{waiting}", st["review"])
+                f"{st['files']} files, {checks}.{verdict} {todo}{waiting}",
+                f"git log --oneline -3 {st['merged_into']}\ngit push" if st["merged_into"] else st["review"])
 
     if planner and not planner["finished"] and time.time() - planner["updated"] < 120:
         add("info", f"Planner is working on {planner['name']}: {planner['tool_count']} files/commands read, "
@@ -280,13 +291,19 @@ def _hints(s: dict) -> list:
                       "Go through them one by one in the terminal (approve, reject, or chat about each).",
             "make review")
 
+    parked = [r["id"] for r in by("rejected") if r.get("parked")]
+    if parked:
+        add("info", f"{len(parked)} low-severity proposal(s) were parked automatically: they are in the reports "
+                    "but don't run. Approve one if you want it after all.",
+            f"make approve IDS=\"{' '.join(parked)}\"")
+
     for r in by("failed"):
         first = (r.get("error") or "").strip().splitlines()[0][:200] if r.get("error") else "unknown error"
         blocked = [x["id"] for x in by("pending") if r["id"] in (x.get("depends_on") or [])]
         add("action", f"{r['id']} failed after {r.get('attempts')} attempt(s): {first}"
                       + (f" — it blocks {', '.join(blocked)}." if blocked else "")
                       + " Click it for the full error and the agent's log; adjust its prompt/scope if needed, then retry.",
-            f"make retry IDS={r['id']} && make run")
+            f"make retry IDS={r['id']}")
 
     pending = by("pending")
     ready = [r for r in pending if set(r.get("depends_on") or []) <= done_ids]

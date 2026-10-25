@@ -6,7 +6,8 @@ Each task is a JSON file; its status is the directory it lives in:
                                   \\-> failed/ (requeued until max_attempts)
 
 Claiming is an atomic os.rename, so two workers can never grab the same task.
-Agents can propose follow-up tasks; they wait in proposed/ until a human approves them.
+Agents can propose follow-up tasks; they wait in proposed/ until a human approves them,
+unless config "auto_decide" settles them by severity (approve, or park in rejected/).
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from common import STATUSES, TASKS_DIR
+from common import NON_WORKER_ROLES, ROLES_DIR, STATUSES, TASKS_DIR, emit
 
 
 def path(status: str, task_id: str) -> Path:
@@ -131,6 +132,52 @@ def propose(source: dict, proposals: list) -> tuple:
         write("proposed", task)
         ids.append(task["id"])
     return ids, errors
+
+
+def approval_problem(task: dict, known: dict, config: dict) -> Optional[str]:
+    """Why a proposal can't be queued as it is, or None."""
+    models = config["models"]
+    missing = [d for d in task.get("depends_on", []) if d not in known]
+    if (missing or task["role"] in NON_WORKER_ROLES or not (ROLES_DIR / f"{task['role']}.md").exists()
+            or (task.get("model") and task["model"] not in models["workers"])
+            or (task.get("effort") and task["effort"] not in models["efforts"])):
+        return (f"role '{task['role']}', model '{task.get('model')}', effort '{task.get('effort')}', "
+                f"unknown deps {missing}")
+    return None
+
+
+def auto_decide(ids: list, config: dict) -> None:
+    """Settle new proposals by severity, as config "auto_decide" says ({"medium": "approve", "low": "park"}).
+
+    Anything else (critical, high, no severity) waits for a human. A parked proposal goes to rejected/
+    with a `parked` note and can still be approved later. An approval is held back for the human when
+    the proposal depends on one that is still waiting or was parked, so it never blocks the queue."""
+    rules = config.get("auto_decide") or {}
+    severity = {tid: (read(path("proposed", tid)).get("severity") or "").lower() for tid in ids}
+    for tid in ids:
+        if rules.get(severity[tid]) == "park":
+            move(tid, "proposed", "rejected", parked=f"auto: {severity[tid]} severity")
+            emit("task_parked", task=tid, detail=f"{severity[tid]} severity, parked automatically")
+    todo = [tid for tid in ids if rules.get(severity[tid]) == "approve"]
+    progress = True
+    while todo and progress:  # repeat, so a proposal that depends on another one in the batch follows it
+        progress = False
+        known = all_tasks()
+        for tid in list(todo):
+            task = known[tid][1]
+            if any(known.get(d, (None,))[0] == "proposed" and d in todo for d in task.get("depends_on", [])):
+                continue
+            todo.remove(tid)
+            blocked = [d for d in task.get("depends_on", []) if known.get(d, (None,))[0] in ("proposed", "rejected")]
+            problem = approval_problem(task, known, config) or (f"depends on {blocked}, still waiting for you or parked" if blocked else None)
+            if problem:
+                emit("task_held", task=tid, detail=f"{severity[tid]} severity, not approved automatically: {problem}")
+                continue
+            move(tid, "proposed", "pending", auto_approved=f"auto: {severity[tid]} severity")
+            emit("task_approved", task=tid, detail=f"{severity[tid]} severity, approved automatically")
+            progress = True
+    for tid in todo:  # their dependencies in the batch were held back
+        emit("task_held", task=tid, detail=f"{severity[tid]} severity, not approved automatically: depends on a held proposal")
 
 
 def add(task: dict) -> None:

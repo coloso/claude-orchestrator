@@ -8,13 +8,24 @@ import (
 	"testing"
 
 	"orch-test/backend/internal/bootstrap"
+	"orch-test/backend/internal/middleware"
 	"orch-test/backend/internal/oas"
 )
+
+// generousLimits is for functional tests: every request comes from 127.0.0.1, so the
+// production limits would throttle tests that make many calls. The rate limit tests
+// use the defaults instead.
+func generousLimits() middleware.RateLimitConfig {
+	cfg := middleware.DefaultRateLimitConfig()
+	cfg.Read = middleware.Limit{PerSecond: 1e6, Burst: 1e6}
+	cfg.Write = middleware.Limit{PerSecond: 1e6, Burst: 1e6}
+	return cfg
+}
 
 // newClient starts a fresh, fully wired server and returns a generated client for it.
 func newClient(t *testing.T) *oas.Client {
 	t.Helper()
-	app, err := bootstrap.New(context.Background(), bootstrap.Config{Storage: bootstrap.StorageMemory})
+	app, err := bootstrap.New(context.Background(), bootstrap.Config{Storage: bootstrap.StorageMemory, RateLimit: generousLimits()})
 	if err != nil {
 		t.Fatal(err)
 	}

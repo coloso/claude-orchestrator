@@ -2,6 +2,9 @@ openapi: 3.0.3
 info:
   title: orch-test API
   version: 0.1.0
+tags:
+  - name: catalog
+    description: The book catalog. Add, read, list, revise and remove books.
 paths:
   /api/health:
     get:
@@ -16,8 +19,264 @@ paths:
                 $ref: "#/components/schemas/Health"
         default:
           $ref: "#/components/responses/Error"
+  /api/books:
+    post:
+      tags: [catalog]
+      operationId: createBook
+      summary: Add a book to the catalog
+      description: |
+        Adds a book and returns it with its generated id and version.
+
+        Errors:
+        - 400 invalid input; the message names the field
+        - 409 a book with this ISBN already exists
+        - 413 request body larger than 64 KiB
+        - 415 content type is not application/json
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookInput"
+      responses:
+        "201":
+          description: The book was added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Book"
+        default:
+          $ref: "#/components/responses/Error"
+    get:
+      tags: [catalog]
+      operationId: listBooks
+      summary: List books
+      description: |
+        Lists books sorted by id ascending, optionally filtered by author.
+
+        Errors:
+        - 400 invalid query
+      parameters:
+        - name: author
+          in: query
+          required: false
+          description: Matches books that have an author exactly equal to this value.
+          schema:
+            type: string
+            maxLength: 200
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of books to return.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          required: false
+          description: >-
+            Number of matching books to skip. Offsets above 100000 are rejected;
+            narrow the result with `author` instead.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 100000
+            default: 0
+      responses:
+        "200":
+          description: A page of books
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookList"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/books/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Book id.
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+    get:
+      tags: [catalog]
+      operationId: getBook
+      summary: Get a book
+      description: |
+        Errors:
+        - 400 invalid id
+        - 404 no book with this id
+      responses:
+        "200":
+          description: The book
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Book"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      tags: [catalog]
+      operationId: updateBook
+      summary: Revise a book
+      description: |
+        Replaces the editable fields of a book. The request must carry the version
+        the client last read.
+
+        Errors:
+        - 400 invalid id
+        - 400 invalid input; the message names the field
+        - 404 no book with this id
+        - 409 the ISBN already exists, or the version does not match
+        - 413 request body larger than 64 KiB
+        - 415 content type is not application/json
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookUpdate"
+      responses:
+        "200":
+          description: The revised book
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Book"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [catalog]
+      operationId: deleteBook
+      summary: Remove a book
+      description: |
+        Errors:
+        - 400 invalid id
+        - 404 no book with this id
+      responses:
+        "204":
+          description: The book was removed
+        default:
+          $ref: "#/components/responses/Error"
 components:
   schemas:
+    Book:
+      type: object
+      required: [id, isbn, title, authors, createdAt, updatedAt, version]
+      properties:
+        id:
+          type: integer
+          format: int64
+        isbn:
+          type: string
+          description: The normalized ISBN-13, e.g. 9780132350884.
+        title:
+          type: string
+        authors:
+          type: array
+          items:
+            type: string
+        publishedYear:
+          type: integer
+        language:
+          type: string
+          description: ISO 639-1 language code.
+        pages:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+          description: RFC 3339 timestamp.
+        updatedAt:
+          type: string
+          format: date-time
+          description: RFC 3339 timestamp.
+        version:
+          type: integer
+          format: int64
+    BookInput:
+      type: object
+      description: >-
+        Only the listed editable fields may be sent. `id`, `createdAt` and `updatedAt`
+        are set by the server and are rejected with 400.
+      additionalProperties: false
+      required: [isbn, title, authors]
+      properties:
+        isbn:
+          type: string
+          description: >-
+            ISBN-13 starting with 978 or 979, with a valid check digit.
+            Hyphens and spaces are removed.
+        title:
+          type: string
+          description: 1-300 characters after trimming.
+        authors:
+          type: array
+          description: 1-20 names of 1-200 characters each, after trimming.
+          items:
+            type: string
+        publishedYear:
+          type: integer
+          description: 1450-2100.
+        language:
+          type: string
+          description: Two lowercase letters (ISO 639-1).
+        pages:
+          type: integer
+          description: 1-10000.
+    BookUpdate:
+      type: object
+      description: >-
+        Only the listed editable fields (plus `version`) may be sent. `id`, `createdAt`
+        and `updatedAt` are set by the server and are rejected with 400.
+      additionalProperties: false
+      required: [isbn, title, authors, version]
+      properties:
+        isbn:
+          type: string
+          description: >-
+            ISBN-13 starting with 978 or 979, with a valid check digit.
+            Hyphens and spaces are removed.
+        title:
+          type: string
+          description: 1-300 characters after trimming.
+        authors:
+          type: array
+          description: 1-20 names of 1-200 characters each, after trimming.
+          items:
+            type: string
+        publishedYear:
+          type: integer
+          description: 1450-2100.
+        language:
+          type: string
+          description: Two lowercase letters (ISO 639-1).
+        pages:
+          type: integer
+          description: 1-10000.
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The version the client last read.
+    BookList:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          description: Books sorted by id ascending.
+          items:
+            $ref: "#/components/schemas/Book"
+        total:
+          type: integer
+          format: int64
+          description: Number of matching books, ignoring limit and offset.
     Health:
       type: object
       required: [status]

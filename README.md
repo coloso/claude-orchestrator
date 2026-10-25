@@ -46,9 +46,9 @@ The orchestrator is a Python CLI (`orchestration/orchestrator/orchestrator.py`, 
 | `make status` | `status` | Every task and its state; errors for failed ones |
 | `make proposals` | `proposals` | Follow-up tasks agents proposed, e.g. security fixes |
 | `make review` | `review` | Goes through the waiting proposals one by one (task text collapsed; t shows it): approve, reject, skip, chat with Claude about it (and have it adjust the proposal), or quit |
-| `make approve IDS="S02-07.1"` | `approve <ids>` | Queues proposals; they run on the next `make run` |
+| `make approve IDS="S02-07.1"` | `approve <ids>` | Queues proposals, including parked ones; they run on the next `make run` |
 | `make reject IDS="S02-07.2"` | `reject <ids>` | Discards proposals |
-| `make retry IDS="S02-03"` | `retry <ids>` | Puts tasks that used up their attempts back in the queue |
+| `make retry` / `make retry IDS="S02-03"` | `retry [ids] --run` | Puts failed tasks back in the queue with fresh attempts and starts a run for their plans. Without `IDS`: every failed task of the stories started from your current branch. `NORUN=1` only requeues |
 | `make reset` | `reset` | Deletes runtime state (`.orch/`, `.worktrees/`, `agent/*` branches). Keeps stories, plans and `story/*` branches |
 | `make demo` / `make dry-run` | `load` + `run [--fake]` | Prepared todo plan, for real or rehearsed |
 
@@ -82,14 +82,16 @@ You stay in charge at three checkpoints: the **plan**, the **spec** and the **pr
    This is the cheapest moment to change your mind. Edit the spec yourself in that worktree (then `make generate` there and commit), or approve the proposed spec fixes. Later tasks start from the story branch, so they pick up your changes.
 6. **Phase 2, implementation:** `make run` runs everything else, including the HTTP adapter, MongoDB storage, e2e tests for the acceptance criteria, docs and the hardening review.
 7. **Decide on proposals:** `make review` (one by one), or `make proposals`, then `approve` or `reject`; then `make run`. Repeat until nothing important is left.
+   - Only `critical` and `high` proposals, and proposals without a severity, wait for you. `"auto_decide"` in `orchestration/config.json` settles the rest: `medium` is approved and runs in the same `make run`, and `low` is **parked**. A parked proposal is stored as rejected, so it doesn't hold up the story. The dashboard shows it as "parked", and `make approve` still queues it. An automatic approval is held back for you if the proposal depends on one that waits for you or was parked.
 8. **Lead review and one commit:** when no task of the plan is left to run, `make run` finalizes the story:
    - it runs all checks on the combined `story/<plan>`;
    - the **lead engineer** agent (`roles/lead.md`) reviews the whole change like a pull request: does it deliver the story, do the separately built tasks fit together, architecture, tests, docs. It changes nothing. It returns a verdict (`approve` or `changes_requested`), a report in `.orch/reviews/<plan>.md`, fix proposals for every blocking finding, and the commit message;
    - it releases the branch and squashes the story into **one commit on `pr/<plan>`** with the lead's message. `story/<plan>` keeps the per-task history;
+   - if the lead approved and every check passed, it **fast-forwards the branch you started from** (the one you ran `make run` on) onto that commit. That's never a merge commit, and nothing is pushed. It is skipped, with the reason on the story card, if that branch got new commits meanwhile, or if your uncommitted or untracked files would be overwritten (git changes nothing then). Turn it off with `"merge_into_base": false` in `orchestration/config.json`;
    - it prints the review and push commands, which the dashboard also shows on the story card.
 
-   If the lead requested changes, `make review` the proposals and `make run` again: the story reopens, and when it's done the lead reviews it again and `pr/<plan>` is rebuilt.
-9. **Ship:** read the review, `git switch pr/<plan>`, try it (`make up`), and push it or open a pull request.
+   If the lead requested changes, `make review` the proposals and `make run` again: the story reopens, and when it's done the lead reviews it again and `pr/<plan>` is rebuilt. If the story was already merged and your branch has nothing newer, the fixes come as one more commit on top, which is merged the same way.
+9. **Ship:** read the review, try it (`make up`), and `git push`. If it wasn't merged automatically: `git switch pr/<plan>` and push that, or merge it yourself.
 
 **Variations**
 - **Small story:** skip the spec checkpoint, `make load` and then a single `make run`.
@@ -221,7 +223,7 @@ git push -u origin story/S02-shopping-list
   - **Click a task** for its prompt, scope, dependencies, errors and the agent's step-by-step log for every attempt.
 - **`make status`:** a failed task shows the gate or agent error.
   - **Attempts:** every task gets `max_attempts` (2), each in a fresh worktree.
-  - **Retry:** after fixing the cause (an unclear prompt in the plan, a wrong scope, …), `make retry IDS=…` and then `make run`.
+  - **Retry:** after fixing the cause (an unclear prompt in the plan, a wrong scope, …), `make retry` (all failed tasks of this branch) or `make retry IDS=…`; it starts the run itself.
 - **Logs:**
   - `.orch/logs/<task>.attempt<N>.jsonl` is the raw Claude stream (every tool call and its result);
   - `.orch/events.jsonl` is the orchestrator's event log.
@@ -399,7 +401,17 @@ make mongo && STORAGE=mongo make backend  # locally against the compose MongoDB
 make test-mongo                           # all checks, including the MongoDB adapter tests
 ```
 
-Configuration (environment): `PORT` (8000), `STORAGE` (`memory` or `mongo`), `MONGO_URI`, `MONGO_DB`, `CORS_ORIGIN`.
+Configuration (environment):
+- `PORT` (8000): the port the server listens on.
+- `LISTEN_HOST` (`127.0.0.1`): the IP address the server listens on. The image sets `0.0.0.0` so the published port works; docker-compose.yml publishes it on `127.0.0.1` only.
+- `STORAGE` (`memory`, the default, or `mongo`), `MONGO_URI`, `MONGO_DB`.
+- `SEED_DEMO_DATA`: parsed with `strconv.ParseBool`; unset or invalid means off. When on, the 12 demo books are added at startup through the catalog use cases, after the migrations. Books whose ISBN is already present are skipped, so restarts don't duplicate them; deleted demo books come back, and edited ones are kept. The log line is `seeded N demo books, skipped M`.
+
+docker-compose.yml deliberately leaves `SEED_DEMO_DATA` unset, so demo data stays off there; to turn it on for one run, use `SEED_DEMO_DATA=true make backend`.
+
+**Books API:** `/api/books` has five operations: `POST` adds a book, `GET` lists them (filter with `author`, page with `limit` and `offset`), and `GET`, `PUT` and `DELETE` work on `/api/books/{id}`. `PUT` needs the `version` you last read; if the book has changed since, the answer is 409. The contract is in [`backend/api/openapi.yaml`](backend/api/openapi.yaml).
+
+**Limits:** request bodies are capped at 64 KiB (413). Each client has a rate limit with separate read (50/s, burst 100) and write (5/s, burst 20) buckets; over the limit the API answers 429 with `Retry-After`. `/api/health` is exempt. Clients are keyed by remote IP, with IPv6 grouped by /64. `X-Forwarded-For` is ignored, so everyone behind Docker port mapping or a reverse proxy shares one bucket. The values are in `backend/internal/middleware/ratelimit.go` (`DefaultRateLimitConfig`).
 
 ## Tuning
 

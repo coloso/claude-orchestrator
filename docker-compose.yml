@@ -2,7 +2,8 @@ name: orch-test
 
 services:
   mongo:
-    image: mongo:8.0
+    # To update the pin: run 'docker buildx imagetools inspect mongo:8.0', copy the top-level digest, keep the tag.
+    image: mongo:8.0@sha256:4a4ab5d4834207389e0d7270fac988e21ffedccecba77991a552f755df229907
     restart: unless-stopped
     ports:
       - "127.0.0.1:27017:27017" # local dev and MONGO_TEST_URI tests only
@@ -22,9 +23,17 @@ services:
       STORAGE: mongo
       MONGO_URI: mongodb://mongo:27017
       MONGO_DB: orch
-      CORS_ORIGIN: http://localhost:5173
+      # SEED_DEMO_DATA is deliberately not set: demo data is opt-in and stays off here.
+      # No CORS_ORIGIN either: nothing reads it, and the API sends no Access-Control-* headers.
     ports:
       - "127.0.0.1:8000:8000"
+    # The server needs no write access, no capabilities and few resources.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 256
     depends_on:
       mongo:
         condition: service_healthy

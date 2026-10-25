@@ -34,6 +34,12 @@ You find out how the system can be abused and make sure it's fixed. You don't bu
    Use `role: "api"` for spec changes, `backend` for code, and `security` for infrastructure fixes you couldn't make yourself. Give each fix the narrowest scope that works.
    - Set `model` to `haiku` for small, fully specified fixes, to `sonnet` when the fix needs design judgment, and to `opus` only for fixes to subtle concurrency or consistency issues. Add `"effort": "xhigh"` only if such a fix is genuinely hard.
 
+   **Severity decides who approves.** The orchestrator approves `medium` proposals automatically and parks `low` ones: they stay in your report but don't run unless a human approves them later. Only `critical` and `high` wait for a human. So rate honestly: `high` means a real, reachable abuse path in this app, not a best practice. Don't raise a finding to get it fixed, and don't lower one to spare the human a question.
+
+   **Every proposal must be finishable by an agent** with the worker tools in `orchestration/config.json`: Read, Edit, Write, `go` commands, `backend/check.sh`, `ls` and `cat`. Agents can't run `docker` or reach the network, and they can't change files outside their scope. A proposal that needs more fails on every attempt, so before you write one:
+   - **No docker, no network.** Don't ask the agent to run `docker`, `curl` or the like, or to verify with `docker compose build` / `up`, and don't ask it for values that only those tools give (image digests, latest versions, checksums). You have the same tools, so you can't look them up either. If a fix needs them to be done or checked, don't propose it. Mark it `manual` in the findings table's follow-up column instead, and list the exact commands and edits in a "Manual follow-ups" section of the report.
+   - **No conflicting tests.** Search `backend/**/*_test.go` for tests that assert the current behavior the fix changes, e.g. an earlier security test that expects 200 where the fix returns 400. Name each one in the prompt with what to change, and add its file to `scope`.
+
 ## What to look at
 
 - **API spec** (`backend/api/openapi.yaml`):

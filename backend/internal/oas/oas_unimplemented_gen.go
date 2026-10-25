@@ -13,12 +13,83 @@ type UnimplementedHandler struct{}
 
 var _ Handler = UnimplementedHandler{}
 
+// CreateBook implements createBook operation.
+//
+// Adds a book and returns it with its generated id and version.
+//
+// Errors:
+//
+//   - 400 invalid input; the message names the field
+//   - 409 a book with this ISBN already exists
+//   - 413 request body larger than 64 KiB
+//   - 415 content type is not application/json
+//
+// POST /api/books
+func (UnimplementedHandler) CreateBook(ctx context.Context, req *BookInput) (r *Book, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// DeleteBook implements deleteBook operation.
+//
+// Errors:
+//
+//   - 400 invalid id
+//   - 404 no book with this id
+//
+// DELETE /api/books/{id}
+func (UnimplementedHandler) DeleteBook(ctx context.Context, params DeleteBookParams) error {
+	return ht.ErrNotImplemented
+}
+
+// GetBook implements getBook operation.
+//
+// Errors:
+//
+//   - 400 invalid id
+//   - 404 no book with this id
+//
+// GET /api/books/{id}
+func (UnimplementedHandler) GetBook(ctx context.Context, params GetBookParams) (r *Book, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // GetHealth implements getHealth operation.
 //
 // Liveness check.
 //
 // GET /api/health
 func (UnimplementedHandler) GetHealth(ctx context.Context) (r *Health, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListBooks implements listBooks operation.
+//
+// Lists books sorted by id ascending, optionally filtered by author.
+//
+// Errors:
+//
+//   - 400 invalid query
+//
+// GET /api/books
+func (UnimplementedHandler) ListBooks(ctx context.Context, params ListBooksParams) (r *BookList, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// UpdateBook implements updateBook operation.
+//
+// Replaces the editable fields of a book. The request must carry the version the client last read.
+//
+// Errors:
+//
+//   - 400 invalid id
+//   - 400 invalid input; the message names the field
+//   - 404 no book with this id
+//   - 409 the ISBN already exists, or the version does not match
+//   - 413 request body larger than 64 KiB
+//   - 415 content type is not application/json
+//
+// PUT /api/books/{id}
+func (UnimplementedHandler) UpdateBook(ctx context.Context, req *BookUpdate, params UpdateBookParams) (r *Book, _ error) {
 	return r, ht.ErrNotImplemented
 }
 

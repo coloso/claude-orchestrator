@@ -53,7 +53,7 @@ func booksTestDB(t *testing.T) *mongo.Collection {
 		_ = client.Disconnect(ctx)
 	})
 
-	app, err := bootstrap.New(ctx, bootstrap.Config{Storage: bootstrap.StorageMongo, MongoURI: uri, MongoDB: dbName})
+	app, err := bootstrap.New(ctx, bootstrap.Config{Storage: bootstrap.StorageMongo, MongoURI: uri, MongoDB: dbName, RateLimit: generousLimits()})
 	if err != nil {
 		t.Fatalf("bootstrap.New: %v", err)
 	}

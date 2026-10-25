@@ -93,6 +93,7 @@ class Worker:
             emit("task_proposed", agent=self.id, task=tid, detail=f"proposed by {task['id']}")
         for err in errors:
             emit("proposal_invalid", agent=self.id, task=task["id"], error=err)
+        tasks.auto_decide(ids, self.config)
 
     def build_prompt(self, task: dict) -> str:
         scope = "\n".join(f"  - {s}" for s in task.get("scope", [])) or "  - (any)"

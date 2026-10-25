@@ -6,5 +6,10 @@ package oas
 type OperationName = string
 
 const (
-	GetHealthOperation OperationName = "GetHealth"
+	CreateBookOperation OperationName = "CreateBook"
+	DeleteBookOperation OperationName = "DeleteBook"
+	GetBookOperation    OperationName = "GetBook"
+	GetHealthOperation  OperationName = "GetHealth"
+	ListBooksOperation  OperationName = "ListBooks"
+	UpdateBookOperation OperationName = "UpdateBook"
 )
