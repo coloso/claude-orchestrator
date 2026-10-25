@@ -2,11 +2,8 @@ package e2e_test
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,9 +11,6 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
-
-	"orch-test/backend/internal/bootstrap"
 )
 
 const booksDocumentValidationFailure = 121
@@ -27,42 +21,9 @@ var booksSeq atomic.Int64
 // migrations run, and returns the books collection.
 func booksTestDB(t *testing.T) *mongo.Collection {
 	t.Helper()
-	uri := os.Getenv("MONGO_TEST_URI")
-	if uri == "" {
-		t.Skip("MONGO_TEST_URI not set")
-	}
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		t.Fatalf("random database name: %v", err)
-	}
-	dbName := "test_" + hex.EncodeToString(b[:])
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	client, err := mongo.Connect(options.Client().ApplyURI(uri))
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := client.Database(dbName).Drop(ctx); err != nil {
-			t.Errorf("drop %s: %v", dbName, err)
-		}
-		_ = client.Disconnect(ctx)
-	})
-
-	app, err := bootstrap.New(ctx, bootstrap.Config{Storage: bootstrap.StorageMongo, MongoURI: uri, MongoDB: dbName, RateLimit: generousLimits()})
-	if err != nil {
-		t.Fatalf("bootstrap.New: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := app.Close(context.Background()); err != nil {
-			t.Errorf("close app: %v", err)
-		}
-	})
-	return client.Database(dbName).Collection("books")
+	cfg, db := e2eMongoConfig(t)
+	e2eServe(t, cfg, db)
+	return db.Collection("books")
 }
 
 // booksValidBook returns a fresh, complete, valid book with a unique _id and isbn.
