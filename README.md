@@ -399,7 +399,17 @@ make mongo && STORAGE=mongo make backend  # locally against the compose MongoDB
 make test-mongo                           # all checks, including the MongoDB adapter tests
 ```
 
-Configuration (environment): `PORT` (8000), `STORAGE` (`memory` or `mongo`), `MONGO_URI`, `MONGO_DB`, `CORS_ORIGIN`.
+Configuration (environment):
+- `PORT` (8000): the port the server listens on.
+- `LISTEN_HOST` (`127.0.0.1`): the IP address the server listens on. The image sets `0.0.0.0` so the published port works; docker-compose.yml publishes it on `127.0.0.1` only.
+- `STORAGE` (`memory`, the default, or `mongo`), `MONGO_URI`, `MONGO_DB`.
+- `SEED_DEMO_DATA`: parsed with `strconv.ParseBool`; unset or invalid means off. When on, the 12 demo books are added at startup through the catalog use cases, after the migrations. Books whose ISBN is already present are skipped, so restarts don't duplicate them; deleted demo books come back, and edited ones are kept. The log line is `seeded N demo books, skipped M`.
+
+docker-compose.yml deliberately leaves `SEED_DEMO_DATA` unset, so demo data stays off there; to turn it on for one run, use `SEED_DEMO_DATA=true make backend`.
+
+**Books API:** `/api/books` has five operations: `POST` adds a book, `GET` lists them (filter with `author`, page with `limit` and `offset`), and `GET`, `PUT` and `DELETE` work on `/api/books/{id}`. `PUT` needs the `version` you last read; if the book has changed since, the answer is 409. The contract is in [`backend/api/openapi.yaml`](backend/api/openapi.yaml).
+
+**Limits:** request bodies are capped at 64 KiB (413). Each client has a rate limit with separate read (50/s, burst 100) and write (5/s, burst 20) buckets; over the limit the API answers 429 with `Retry-After`. `/api/health` is exempt. Clients are keyed by remote IP, with IPv6 grouped by /64. `X-Forwarded-For` is ignored, so everyone behind Docker port mapping or a reverse proxy shares one bucket. The values are in `backend/internal/middleware/ratelimit.go` (`DefaultRateLimitConfig`).
 
 ## Tuning
 

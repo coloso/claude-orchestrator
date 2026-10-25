@@ -8,12 +8,68 @@ import (
 
 // Handler handles operations described by OpenAPI v3 specification.
 type Handler interface {
+	// CreateBook implements createBook operation.
+	//
+	// Adds a book and returns it with its generated id and version.
+	//
+	// Errors:
+	//
+	//  - 400 invalid input; the message names the field
+	//  - 409 a book with this ISBN already exists
+	//  - 413 request body larger than 64 KiB
+	//  - 415 content type is not application/json
+	//
+	// POST /api/books
+	CreateBook(ctx context.Context, req *BookInput) (*Book, error)
+	// DeleteBook implements deleteBook operation.
+	//
+	// Errors:
+	//
+	//  - 400 invalid id
+	//  - 404 no book with this id
+	//
+	// DELETE /api/books/{id}
+	DeleteBook(ctx context.Context, params DeleteBookParams) error
+	// GetBook implements getBook operation.
+	//
+	// Errors:
+	//
+	//  - 400 invalid id
+	//  - 404 no book with this id
+	//
+	// GET /api/books/{id}
+	GetBook(ctx context.Context, params GetBookParams) (*Book, error)
 	// GetHealth implements getHealth operation.
 	//
 	// Liveness check.
 	//
 	// GET /api/health
 	GetHealth(ctx context.Context) (*Health, error)
+	// ListBooks implements listBooks operation.
+	//
+	// Lists books sorted by id ascending, optionally filtered by author.
+	//
+	// Errors:
+	//
+	//  - 400 invalid query
+	//
+	// GET /api/books
+	ListBooks(ctx context.Context, params ListBooksParams) (*BookList, error)
+	// UpdateBook implements updateBook operation.
+	//
+	// Replaces the editable fields of a book. The request must carry the version the client last read.
+	//
+	// Errors:
+	//
+	//  - 400 invalid id
+	//  - 400 invalid input; the message names the field
+	//  - 404 no book with this id
+	//  - 409 the ISBN already exists, or the version does not match
+	//  - 413 request body larger than 64 KiB
+	//  - 415 content type is not application/json
+	//
+	// PUT /api/books/{id}
+	UpdateBook(ctx context.Context, req *BookUpdate, params UpdateBookParams) (*Book, error)
 	// NewError creates *ErrorStatusCode from error returned by handler.
 	//
 	// Used for common default response.

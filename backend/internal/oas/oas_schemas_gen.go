@@ -4,11 +4,329 @@ package oas
 
 import (
 	"fmt"
+	"time"
 )
 
 func (s *ErrorStatusCode) Error() string {
 	return fmt.Sprintf("code %d: %+v", s.StatusCode, s.Response)
 }
+
+// Ref: #/components/schemas/Book
+type Book struct {
+	ID int64 `json:"id"`
+	// The normalized ISBN-13, e.g. 9780132350884.
+	Isbn          string   `json:"isbn"`
+	Title         string   `json:"title"`
+	Authors       []string `json:"authors"`
+	PublishedYear OptInt   `json:"publishedYear"`
+	// ISO 639-1 language code.
+	Language OptString `json:"language"`
+	Pages    OptInt    `json:"pages"`
+	// RFC 3339 timestamp.
+	CreatedAt time.Time `json:"createdAt"`
+	// RFC 3339 timestamp.
+	UpdatedAt time.Time `json:"updatedAt"`
+	Version   int64     `json:"version"`
+}
+
+// GetID returns the value of ID.
+func (s *Book) GetID() int64 {
+	return s.ID
+}
+
+// GetIsbn returns the value of Isbn.
+func (s *Book) GetIsbn() string {
+	return s.Isbn
+}
+
+// GetTitle returns the value of Title.
+func (s *Book) GetTitle() string {
+	return s.Title
+}
+
+// GetAuthors returns the value of Authors.
+func (s *Book) GetAuthors() []string {
+	return s.Authors
+}
+
+// GetPublishedYear returns the value of PublishedYear.
+func (s *Book) GetPublishedYear() OptInt {
+	return s.PublishedYear
+}
+
+// GetLanguage returns the value of Language.
+func (s *Book) GetLanguage() OptString {
+	return s.Language
+}
+
+// GetPages returns the value of Pages.
+func (s *Book) GetPages() OptInt {
+	return s.Pages
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *Book) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// GetUpdatedAt returns the value of UpdatedAt.
+func (s *Book) GetUpdatedAt() time.Time {
+	return s.UpdatedAt
+}
+
+// GetVersion returns the value of Version.
+func (s *Book) GetVersion() int64 {
+	return s.Version
+}
+
+// SetID sets the value of ID.
+func (s *Book) SetID(val int64) {
+	s.ID = val
+}
+
+// SetIsbn sets the value of Isbn.
+func (s *Book) SetIsbn(val string) {
+	s.Isbn = val
+}
+
+// SetTitle sets the value of Title.
+func (s *Book) SetTitle(val string) {
+	s.Title = val
+}
+
+// SetAuthors sets the value of Authors.
+func (s *Book) SetAuthors(val []string) {
+	s.Authors = val
+}
+
+// SetPublishedYear sets the value of PublishedYear.
+func (s *Book) SetPublishedYear(val OptInt) {
+	s.PublishedYear = val
+}
+
+// SetLanguage sets the value of Language.
+func (s *Book) SetLanguage(val OptString) {
+	s.Language = val
+}
+
+// SetPages sets the value of Pages.
+func (s *Book) SetPages(val OptInt) {
+	s.Pages = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *Book) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+// SetUpdatedAt sets the value of UpdatedAt.
+func (s *Book) SetUpdatedAt(val time.Time) {
+	s.UpdatedAt = val
+}
+
+// SetVersion sets the value of Version.
+func (s *Book) SetVersion(val int64) {
+	s.Version = val
+}
+
+// Only the listed editable fields may be sent. `id`, `createdAt` and `updatedAt` are set by the server
+// and are rejected with 400.
+// Ref: #/components/schemas/BookInput
+type BookInput struct {
+	// ISBN-13 starting with 978 or 979, with a valid check digit. Hyphens and spaces are removed.
+	Isbn string `json:"isbn"`
+	// 1-300 characters after trimming.
+	Title string `json:"title"`
+	// 1-20 names of 1-200 characters each, after trimming.
+	Authors []string `json:"authors"`
+	// 1450-2100.
+	PublishedYear OptInt `json:"publishedYear"`
+	// Two lowercase letters (ISO 639-1).
+	Language OptString `json:"language"`
+	// 1-10000.
+	Pages OptInt `json:"pages"`
+}
+
+// GetIsbn returns the value of Isbn.
+func (s *BookInput) GetIsbn() string {
+	return s.Isbn
+}
+
+// GetTitle returns the value of Title.
+func (s *BookInput) GetTitle() string {
+	return s.Title
+}
+
+// GetAuthors returns the value of Authors.
+func (s *BookInput) GetAuthors() []string {
+	return s.Authors
+}
+
+// GetPublishedYear returns the value of PublishedYear.
+func (s *BookInput) GetPublishedYear() OptInt {
+	return s.PublishedYear
+}
+
+// GetLanguage returns the value of Language.
+func (s *BookInput) GetLanguage() OptString {
+	return s.Language
+}
+
+// GetPages returns the value of Pages.
+func (s *BookInput) GetPages() OptInt {
+	return s.Pages
+}
+
+// SetIsbn sets the value of Isbn.
+func (s *BookInput) SetIsbn(val string) {
+	s.Isbn = val
+}
+
+// SetTitle sets the value of Title.
+func (s *BookInput) SetTitle(val string) {
+	s.Title = val
+}
+
+// SetAuthors sets the value of Authors.
+func (s *BookInput) SetAuthors(val []string) {
+	s.Authors = val
+}
+
+// SetPublishedYear sets the value of PublishedYear.
+func (s *BookInput) SetPublishedYear(val OptInt) {
+	s.PublishedYear = val
+}
+
+// SetLanguage sets the value of Language.
+func (s *BookInput) SetLanguage(val OptString) {
+	s.Language = val
+}
+
+// SetPages sets the value of Pages.
+func (s *BookInput) SetPages(val OptInt) {
+	s.Pages = val
+}
+
+// Ref: #/components/schemas/BookList
+type BookList struct {
+	// Books sorted by id ascending.
+	Items []Book `json:"items"`
+	// Number of matching books, ignoring limit and offset.
+	Total int64 `json:"total"`
+}
+
+// GetItems returns the value of Items.
+func (s *BookList) GetItems() []Book {
+	return s.Items
+}
+
+// GetTotal returns the value of Total.
+func (s *BookList) GetTotal() int64 {
+	return s.Total
+}
+
+// SetItems sets the value of Items.
+func (s *BookList) SetItems(val []Book) {
+	s.Items = val
+}
+
+// SetTotal sets the value of Total.
+func (s *BookList) SetTotal(val int64) {
+	s.Total = val
+}
+
+// Only the listed editable fields (plus `version`) may be sent. `id`, `createdAt` and `updatedAt` are
+// set by the server and are rejected with 400.
+// Ref: #/components/schemas/BookUpdate
+type BookUpdate struct {
+	// ISBN-13 starting with 978 or 979, with a valid check digit. Hyphens and spaces are removed.
+	Isbn string `json:"isbn"`
+	// 1-300 characters after trimming.
+	Title string `json:"title"`
+	// 1-20 names of 1-200 characters each, after trimming.
+	Authors []string `json:"authors"`
+	// 1450-2100.
+	PublishedYear OptInt `json:"publishedYear"`
+	// Two lowercase letters (ISO 639-1).
+	Language OptString `json:"language"`
+	// 1-10000.
+	Pages OptInt `json:"pages"`
+	// The version the client last read.
+	Version int64 `json:"version"`
+}
+
+// GetIsbn returns the value of Isbn.
+func (s *BookUpdate) GetIsbn() string {
+	return s.Isbn
+}
+
+// GetTitle returns the value of Title.
+func (s *BookUpdate) GetTitle() string {
+	return s.Title
+}
+
+// GetAuthors returns the value of Authors.
+func (s *BookUpdate) GetAuthors() []string {
+	return s.Authors
+}
+
+// GetPublishedYear returns the value of PublishedYear.
+func (s *BookUpdate) GetPublishedYear() OptInt {
+	return s.PublishedYear
+}
+
+// GetLanguage returns the value of Language.
+func (s *BookUpdate) GetLanguage() OptString {
+	return s.Language
+}
+
+// GetPages returns the value of Pages.
+func (s *BookUpdate) GetPages() OptInt {
+	return s.Pages
+}
+
+// GetVersion returns the value of Version.
+func (s *BookUpdate) GetVersion() int64 {
+	return s.Version
+}
+
+// SetIsbn sets the value of Isbn.
+func (s *BookUpdate) SetIsbn(val string) {
+	s.Isbn = val
+}
+
+// SetTitle sets the value of Title.
+func (s *BookUpdate) SetTitle(val string) {
+	s.Title = val
+}
+
+// SetAuthors sets the value of Authors.
+func (s *BookUpdate) SetAuthors(val []string) {
+	s.Authors = val
+}
+
+// SetPublishedYear sets the value of PublishedYear.
+func (s *BookUpdate) SetPublishedYear(val OptInt) {
+	s.PublishedYear = val
+}
+
+// SetLanguage sets the value of Language.
+func (s *BookUpdate) SetLanguage(val OptString) {
+	s.Language = val
+}
+
+// SetPages sets the value of Pages.
+func (s *BookUpdate) SetPages(val OptInt) {
+	s.Pages = val
+}
+
+// SetVersion sets the value of Version.
+func (s *BookUpdate) SetVersion(val int64) {
+	s.Version = val
+}
+
+// DeleteBookNoContent is response for DeleteBook operation.
+type DeleteBookNoContent struct{}
 
 // Ref: #/components/schemas/Error
 type Error struct {
@@ -64,4 +382,96 @@ func (s *Health) GetStatus() string {
 // SetStatus sets the value of Status.
 func (s *Health) SetStatus(val string) {
 	s.Status = val
+}
+
+// NewOptInt returns new OptInt with value set to v.
+func NewOptInt(v int) OptInt {
+	return OptInt{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptInt is optional int.
+type OptInt struct {
+	Value int
+	Set   bool
+}
+
+// IsSet returns true if OptInt was set.
+func (o OptInt) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptInt) Reset() {
+	var v int
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptInt) SetTo(v int) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptInt) Get() (v int, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptInt) Or(d int) int {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptString returns new OptString with value set to v.
+func NewOptString(v string) OptString {
+	return OptString{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptString is optional string.
+type OptString struct {
+	Value string
+	Set   bool
+}
+
+// IsSet returns true if OptString was set.
+func (o OptString) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptString) Reset() {
+	var v string
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptString) SetTo(v string) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptString) Get() (v string, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptString) Or(d string) string {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
 }
