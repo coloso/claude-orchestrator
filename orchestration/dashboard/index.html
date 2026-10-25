@@ -109,6 +109,7 @@
       <span id="runpill" class="pill"><span class="dot"></span><span>waiting for state…</span></span>
       <div id="progress" class="progress" hidden></div>
       <span id="progress-label" class="muted"></span>
+      <div id="scope" class="chips" style="margin:0 0 0 auto" title="Which stories, tasks and events to show"></div>
     </div>
     <div id="meta" class="muted" style="font-size:12px;margin-top:4px"></div>
   </header>
@@ -143,7 +144,7 @@
 <aside id="drawer" aria-label="Task details" tabindex="-1"></aside>
 
 <script>
-const LABEL = { proposed: "proposed — needs you", pending: "pending", claimed: "in progress", passed: "passed gate", done: "merged", failed: "failed", rejected: "rejected" };
+const LABEL = { proposed: "proposed — needs you", parked: "parked", pending: "pending", claimed: "in progress", passed: "passed gate", done: "merged", failed: "failed", rejected: "rejected" };
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const clock = (ts) => ts ? new Date(ts * 1000).toLocaleTimeString() : "";
 const dur = (s) => s == null ? "" : s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`;
@@ -154,6 +155,7 @@ let selected = decodeURIComponent(location.hash.slice(1)) || null;
 const pref = (k, d) => { try { return JSON.parse(localStorage.getItem(`orch.${k}`)) ?? d; } catch { return d; } };
 const setPref = (k, v) => { try { localStorage.setItem(`orch.${k}`, JSON.stringify(v)); } catch {} };
 let filter = pref("filter", "all");
+let scope = pref("scope", "branch");  // "branch": only stories started from your checkout; "all": everything
 const openStages = new Set();
 const FILTERS = {
   all: ["All", () => true],
@@ -165,6 +167,35 @@ const FILTERS = {
 const STATUS_ORDER = ["done", "passed", "claimed", "pending", "failed", "proposed", "rejected"];
 // "/…/.worktrees/S01-08.3/backend/x.go" -> "backend/x.go"
 const shortPaths = (s) => String(s ?? "").replace(/\S*\/\.worktrees\/[^/\s]+\//g, "");
+
+// Plans whose story branch was started from the branch you have checked out, plus plans not started
+// yet (they will start from wherever you run `make run`). On a story/<plan> branch: just that plan.
+function branchPlans(s) {
+  const b = s.git.branch;
+  if (b.startsWith("story/")) return new Set([b.slice("story/".length)]);
+  return new Set((s.stories || []).filter((st) => !st.base || st.base === b).map((st) => st.plan));
+}
+
+// The state as the current scope shows it: stories, tasks and their events narrowed to this branch.
+function view(s = state) {
+  if (!s || scope === "all") return s;
+  const plans = branchPlans(s);
+  const tasks = s.tasks.filter((t) => plans.has(t.plan));
+  const ids = new Set(tasks.map((t) => t.id));
+  return { ...s, tasks, stories: (s.stories || []).filter((st) => plans.has(st.plan)),
+           events: s.events.filter((e) => !e.task || ids.has(e.task)) };
+}
+
+function renderScope(s) {
+  const n = branchPlans(s).size, total = (s.stories || []).length;
+  const opts = { branch: [`This branch`, n, `Only stories started from ${s.git.branch}`], all: ["All", total, "Every story and task"] };
+  document.getElementById("scope").innerHTML = Object.entries(opts).map(([k, [label, count, title]]) =>
+    `<button class="chip ${scope === k ? "on" : ""}" data-scope="${k}" title="${esc(title)}">${label}<span class="n">${count}</span></button>`).join("");
+  document.querySelectorAll("#scope [data-scope]").forEach((b) => (b.onclick = () => {
+    scope = b.dataset.scope; setPref("scope", scope);
+    if (state) renderAll();
+  }));
+}
 
 function copy(btn, text) {
   navigator.clipboard?.writeText(text).then(() => { btn.textContent = "copied"; setTimeout(() => (btn.textContent = "copy"), 1200); });
@@ -268,7 +299,7 @@ async function loadReport(file) {
 
 function leadBlock(st) {
   const r = st.lead;
-  if (!r?.verdict && !st.pr_commit) return "";
+  if (!r?.verdict && !st.pr_commit && !st.merged_into && !st.merge_skipped) return "";
   const [color, label] = LEAD[r?.verdict] || ["--info", "not reviewed"];
   return `<div style="margin-top:8px">
     ${r?.verdict ? `<div class="row" style="gap:8px">
@@ -282,6 +313,8 @@ function leadBlock(st) {
       <pre class="box" data-report-body="${esc(r.report)}">${esc(reports[r.report] ?? "loading…")}</pre></details>` : ""}
     ${r.log ? `<div class="muted" style="margin-top:4px">log: <code>${esc(r.log)}</code></div>` : ""}` : ""}
     ${st.pr_commit ? `<div class="muted" style="margin-top:6px">One commit on <code>${esc(st.pr_branch)}</code> · <code>${esc(st.pr_commit)}</code> ${esc(st.pr_title || "")}</div>` : ""}
+    ${st.merged_into ? `<div style="margin-top:4px"><span class="pill"><span class="dot" style="background:var(--ok)"></span>merged onto <code>${esc(st.merged_into)}</code> · not pushed</span></div>`
+      : st.merge_skipped ? `<div class="muted" style="margin-top:4px">Not merged onto <code>${esc(st.base)}</code>: ${esc(st.merge_skipped)}</div>` : ""}
   </div>`;
 }
 
@@ -308,13 +341,17 @@ function renderAgents(s) {
       ${esc(a.id)} · ${esc(a.status)}${a.task ? ` · <a href="#${esc(a.task)}">${esc(a.task)}</a> (${esc(a.model || "")})` : ""}</span>`).join("");
 }
 
+// A parked proposal is stored as rejected, but you can still approve it.
+const shownStatus = (t) => t.status === "rejected" && t.parked ? "parked" : t.status;
+
 function taskCard(t) {
   const model = [t.model, t.effort].filter(Boolean).join("/");
   return `<div class="card task ${t.id === selected ? "sel" : ""}" style="--c:var(--${t.status})" data-id="${esc(t.id)}" tabindex="0">
     <div class="t">${esc(t.id)} · ${esc(t.title)}</div>
     <div class="meta">
-      <span class="tag" style="color:var(--${t.status})">${LABEL[t.status]}</span>
+      <span class="tag" style="color:var(--${t.status})">${LABEL[shownStatus(t)]}</span>
       <span class="tag">${esc(t.role)}</span>
+      ${t.auto_approved ? `<span class="tag" title="${esc(t.auto_approved)}">auto-approved</span>` : ""}
       ${model ? `<span class="tag">${esc(model)}</span>` : ""}
       ${t.severity ? `<span class="tag">${esc(t.severity)}</span>` : ""}
       ${t.attempts > 1 ? `<span class="tag">attempt ${t.attempts}</span>` : ""}
@@ -357,7 +394,11 @@ function renderTasks(s) {
   if (proposals.length) html += `<div class="stage"><div class="stage-head">Proposed by agents — <code>make review</code> to decide</div>
     <div class="tasks">${proposals.map(taskCard).join("")}</div></div>`;
   document.getElementById("stages").innerHTML = html
-    || `<div class="card muted">${s.tasks.length ? `No tasks match “${FILTERS[filter][0]}”.` : "No tasks queued."}</div>`;
+    || `<div class="card muted">${s.tasks.length ? `No tasks match “${FILTERS[filter][0]}”.`
+      : scope === "branch" && state.tasks.length ? `No tasks on ${esc(s.git.branch)}. <a href="#" id="showall">Show all ${state.tasks.length}</a>`
+      : "No tasks queued."}</div>`;
+  const all = document.getElementById("showall");
+  if (all) all.onclick = (ev) => { ev.preventDefault(); scope = "all"; setPref("scope", scope); renderAll(); };
   document.querySelectorAll("#stages details.stage").forEach((d) => d.addEventListener("toggle", () => {
     const n = Number(d.dataset.stage);
     d.open ? openStages.add(n) : openStages.delete(n);
@@ -371,7 +412,7 @@ function renderTasks(s) {
 const EVENT_COLORS = {
   task_failed: "--failed", proposal_invalid: "--failed", task_done: "--done", task_passed: "--passed",
   task_claimed: "--claimed", task_proposed: "--proposed", task_approved: "--done", task_rejected: "--muted",
-  task_requeued: "--warn",
+  task_requeued: "--warn", task_parked: "--muted", task_held: "--proposed",
 };
 function renderEvents(s) {
   const box = document.getElementById("events");
@@ -452,14 +493,16 @@ async function renderDrawer() {
     </div>
     <div class="body">
     <div class="meta row" style="gap:6px;margin-top:12px">
-      <span class="tag" style="color:var(--${t.status})">${LABEL[t.status]}</span><span class="tag">${esc(t.role)}</span>
+      <span class="tag" style="color:var(--${t.status})">${LABEL[shownStatus(t)]}</span><span class="tag">${esc(t.role)}</span>
+      ${t.auto_approved || t.parked ? `<span class="tag">${esc(t.auto_approved || t.parked)}</span>` : ""}
       <span class="tag">${esc(model)}</span>${t.ran_as ? `<span class="tag">ran as ${esc(t.ran_as)}</span>` : ""}
       <span class="tag">stage ${t.stage}</span>${t.attempts ? `<span class="tag">attempts ${t.attempts}</span>` : ""}
       ${t.duration_s != null ? `<span class="tag">${dur(t.duration_s)}</span>` : ""}${t.cost_usd ? `<span class="tag">${money(t.cost_usd)}</span>` : ""}
     </div>
     ${t.rationale ? `<h4>Why (proposal)</h4><div>${esc(t.rationale)}</div><div class="muted">proposed by ${esc(t.proposed_by)}</div>` : ""}
+    ${t.parked ? `<h4>Approve after all</h4>${cmdRow(`make approve IDS=${t.id}`)}` : ""}
     ${t.status === "proposed" ? `<h4>Decide</h4>${cmdRow("make review")}${cmdRow(`make approve IDS=${t.id}`)}${cmdRow(`make reject IDS=${t.id}`)}` : ""}
-    ${t.status === "failed" ? `<h4>Retry</h4>${cmdRow(`make retry IDS=${t.id} && make run`)}` : ""}
+    ${t.status === "failed" ? `<h4>Retry</h4>${cmdRow(`make retry IDS=${t.id}`)}` : ""}
     ${t.error || t.failures?.length ? `<h4>Errors</h4><div class="box err"><pre>${esc(t.error || t.failures[t.failures.length - 1])}</pre></div>` : ""}
     <h4>Depends on</h4><div>${(t.depends_on || []).map((x) => `<a href="#${esc(x)}">${esc(x)}</a>`).join(", ") || "—"}</div>
     <h4>Scope (files it may change)</h4><pre class="box">${esc((t.scope || []).join("\n"))}</pre>
@@ -484,7 +527,7 @@ function select(id) {
   const previous = selected;
   selected = id;
   history.replaceState(null, "", id ? `#${encodeURIComponent(id)}` : location.pathname);
-  if (state) { renderTasks(state); renderEvents(state); }
+  if (state) { renderTasks(view()); renderEvents(view()); }
   renderDrawer();
   if (!id && previous) document.querySelector(`.task[data-id="${CSS.escape(previous)}"]`)?.focus({ preventScroll: true });
 }
@@ -499,24 +542,28 @@ document.addEventListener("keydown", (ev) => {
 // ---------------------------------------------------------------- polling
 
 let lastDrawer = 0;
+function renderAll() {
+  const v = view();
+  renderScope(state); renderHeader(v); renderHints(v); renderStories(v); renderPlanner(v); renderAgents(v);
+  renderFilters(v); renderTasks(v); renderEvents(v);
+}
 async function poll() {
   try {
     const res = await fetch("/.orch/state.json", { cache: "no-store" });
     if (res.ok) {
       state = await res.json();
-      renderHeader(state); renderHints(state); renderStories(state); renderPlanner(state); renderAgents(state);
-      renderFilters(state); renderTasks(state); renderEvents(state);
+      renderAll();
       const t = state.tasks.find((x) => x.id === selected);
       if (selected && (Date.now() - lastDrawer > 4000 || !document.getElementById("drawer").classList.contains("open"))) {
         if (!t || t.status === "claimed" || Date.now() - lastDrawer > 15000) { lastDrawer = Date.now(); renderDrawer(); }
       }
-    } else if (state) renderHeader(state);  // keep the age in the pill current; it turns into a stale warning
+    } else if (state) renderHeader(view());  // keep the age in the pill current; it turns into a stale warning
   } catch (e) { renderOffline(); }
   setTimeout(poll, 1500);
 }
 const toolsBox = document.getElementById("showtools");
 toolsBox.checked = pref("showTools", false);
-toolsBox.onchange = () => { setPref("showTools", toolsBox.checked); if (state) renderEvents(state); };
+toolsBox.onchange = () => { setPref("showTools", toolsBox.checked); if (state) renderEvents(view()); };
 poll();
 if (selected) setTimeout(renderDrawer, 300);
 </script>

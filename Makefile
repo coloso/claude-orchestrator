@@ -49,8 +49,8 @@ approve:          ## ✅ Approve proposals (make approve IDS="T-010.1 T-010.3")
 reject:           ## ❌ Reject proposals (make reject IDS="T-010.2")
 	$(ORCH) reject $(IDS)
 
-retry:            ## 🔄 Reset failed tasks to pending with fresh attempts
-	$(ORCH) retry $(IDS)
+retry:            ## 🔄 Retry failed tasks of this branch and run their plan (IDS="S02-03" to pick, NORUN=1 to only requeue)
+	$(ORCH) retry $(IDS) $(if $(NORUN),,--run)
 
 reset:            ## 🧹 Remove queue state, worktrees and agent/* branches
 	$(ORCH) reset

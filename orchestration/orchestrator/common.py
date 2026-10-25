@@ -100,6 +100,10 @@ def tool_env() -> dict:
     """Environment for agents and gates."""
     env = dict(os.environ)
     env.setdefault("MCP_TIMEOUT", "60000")  # first start of an npx-based MCP server downloads it
+    # 1-hour prompt cache: retries, gate fixes and long agent turns often resume after more than
+    # the default 5 minutes. Export either variable as 5m to opt out.
+    env.setdefault("CLAUDE_CODE_PROMPT_CACHE_TTL", "1h")
+    env.setdefault("CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL", "1h")
     return env
 
 

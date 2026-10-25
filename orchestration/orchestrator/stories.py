@@ -9,7 +9,9 @@ and passing tasks are merged into it one at a time. When every task of the plan 
    commit message);
 3. the integration worktree is removed (so you can check the branch out yourself);
 4. the story is squashed into one commit on pr/<plan>, ready to push as a pull request.
-   story/<plan> keeps the per-task history.
+   story/<plan> keeps the per-task history;
+5. with config "merge_into_base", an approved story with passing checks is fast-forwarded onto
+   the branch it started from (usually the one you have checked out). Never a merge commit.
 
 Approving a proposal reopens the story; finishing it again re-runs the review and the squash.
 """
@@ -57,6 +59,11 @@ def branch(plan: str) -> str:
 
 def pr_branch(plan: str) -> str:
     return f"pr/{plan}"
+
+
+def plans_based_on(base: str) -> set:
+    """Plans whose story branch was started from `base` (the branch `make run` ran on)."""
+    return {p.stem for p in STORIES_DIR.glob("*.json") if info(p.stem).get("base") == base}
 
 
 def worktree_path(plan: str) -> Path:
@@ -135,11 +142,19 @@ def finalize(plan: str, config: dict, run_checks: bool = True) -> dict:
     git("worktree", "remove", "--force", str(wt), check=False)
     git("worktree", "prune", check=False)
     pr = squash(plan, base, review.get("commit_title"), review.get("commit_body"))
+    merged = {}
+    if config.get("merge_into_base") and run_checks and pr.get("pr_commit") and not pr.get("pr_error"):
+        merged = ({"merge_skipped": "the lead engineer did not approve the story"} if review.get("verdict") != "approve"
+                  else {"merge_skipped": "checks failed"} if not all(c["ok"] for c in checks)
+                  else merge_into_base(pr["pr_branch"], base))
     summary = {
         "branch": b,
         "base": base,
         "review": {k: v for k, v in review.items() if k not in ("commit_title", "commit_body")},
         **pr,
+        "merged_into": merged.get("merged_into"),
+        **({"merged_commit": merged["merged_commit"]} if merged.get("merged_commit") else {}),  # kept until the next merge
+        "merge_skipped": merged.get("merge_skipped"),
         "head": git("rev-parse", "--short", b, check=False).stdout.strip(),
         "commits": int(git("rev-list", "--count", f"{base}..{b}", check=False).stdout.strip() or 0),
         "files": len(changed),
@@ -233,6 +248,7 @@ def lead_review(plan: str, wt: Path, base: str, checks: list, config: dict) -> d
             emit("task_proposed", task=tid, detail="proposed by the lead engineer")
         for err in errors:
             emit("proposal_invalid", task=f"{prefix}-LEAD", error=err)
+        tasks.auto_decide(ids, config)
     emit("lead_reviewed", task=None, detail=f"{branch(plan)}: {review['verdict']}"
                                             + (f", {len(ids)} proposal(s)" if ids else ""))
     return {
@@ -251,6 +267,11 @@ def squash(plan: str, base: str, title: str = None, body: str = None) -> dict:
     The commit has story/<plan>'s exact tree, so nothing is re-merged; story/<plan> is left as it is."""
     b, pr = branch(plan), pr_branch(plan)
     mb = git("merge-base", base, b, check=False).stdout.strip()
+    # A reopened story whose last commit is already on `base` (and nothing came after it) continues
+    # from there, so the new commit can be fast-forwarded too.
+    rec, tip = info(plan), git("rev-parse", base, check=False).stdout.strip()
+    if any(c and tip.startswith(c) for c in (rec.get("merged_commit"), rec.get("pr_commit"))):
+        mb = tip
     if not mb or not git("diff", "--name-only", f"{mb}..{b}", check=False).stdout.strip():
         return {}
     if not title:
@@ -265,6 +286,26 @@ def squash(plan: str, base: str, title: str = None, body: str = None) -> dict:
     moved = git("branch", "-f", pr, sha, check=False)
     return {"pr_branch": pr, "pr_commit": sha[:10], "pr_title": title,
             **({"pr_error": moved.stderr.strip()[-300:]} if moved.returncode else {})}
+
+
+def merge_into_base(pr: str, base: str) -> dict:
+    """Fast-forward `base` to pr/<plan>. Returns {"merged_into": base} or {"merge_skipped": reason}.
+    Git refuses (and changes nothing) if your uncommitted or untracked files are in the way."""
+    if git("merge-base", "--is-ancestor", base, pr, check=False).returncode:
+        return {"merge_skipped": f"{base} has commits that are not in the story; merge {pr} yourself"}
+    checked_out = [l.removeprefix("branch refs/heads/") for l in git("worktree", "list", "--porcelain").stdout.splitlines()
+                   if l.startswith("branch ")]
+    if git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == base:
+        r = git("merge", "--ff-only", "--quiet", pr, check=False)
+    elif base in checked_out:
+        return {"merge_skipped": f"{base} is checked out in another worktree"}
+    else:
+        r = git("update-ref", f"refs/heads/{base}", git("rev-parse", pr).stdout.strip(),
+                git("rev-parse", base).stdout.strip(), check=False)
+    if r.returncode:
+        return {"merge_skipped": (r.stderr or r.stdout).strip()[-300:]}
+    emit("story_merged", task=None, detail=f"{pr} fast-forwarded onto {base}")
+    return {"merged_into": base, "merged_commit": git("rev-parse", "--short=10", pr).stdout.strip()}
 
 
 def review_commands(plan: str) -> str:
@@ -306,4 +347,9 @@ def print_summary(plan: str) -> None:
         print(f"Squashed into one commit on {s['pr_branch']} ({s['pr_commit']}): {s.get('pr_title', '')}")
     if s.get("pr_error"):
         print(f"Could not update {s.get('pr_branch')}: {s['pr_error']}")
+    if s.get("merged_into"):
+        print(f"Merged onto {s['merged_into']} (fast-forward). It is not pushed: git push")
+        return
+    if s.get("merge_skipped"):
+        print(f"Not merged onto {s.get('base')}: {s['merge_skipped']}")
     print("Review and push it yourself:\n" + "\n".join("  " + l for l in review_commands(plan).splitlines()))
