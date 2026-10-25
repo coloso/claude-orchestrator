@@ -6,9 +6,9 @@ package e2e_test
 // the spec-level findings (body size, unknown fields, numbers, headers, timeouts).
 //
 // Requests are raw net/http, because the generated client cannot send malformed input. Every
-// top-level identifier is prefixed with "securityCatalog". Each test runs against the memory
-// repository and against MongoDB unless noted; the MongoDB variants run only when MONGO_TEST_URI is
-// set, and each uses its own database test_<random hex>, dropped when the test ends.
+// top-level identifier is prefixed with "securityCatalog". Every test runs against MongoDB, on its
+// own database test_<random hex> that the shared e2e helper drops when the test ends; without
+// MONGO_TEST_URI the tests fail.
 //
 // A test that starts with t.Skip("SECURITY <id>: ...") pins behavior that does not hold yet; the
 // follow-up named there removes the skip.
@@ -16,14 +16,11 @@ package e2e_test
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"regexp"
@@ -37,100 +34,31 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"orch-test/backend/internal/bootstrap"
 )
 
 // --- harness ---------------------------------------------------------------------------------
 
-// securityCatalogEnv is a running application. db is nil for memory storage.
+// securityCatalogEnv is a running application on a fresh MongoDB test database db.
 type securityCatalogEnv struct {
 	url string
 	app *bootstrap.App
 	db  *mongo.Database
 }
 
-var securityCatalogBackends = []struct {
-	name  string
-	mongo bool
-}{
-	{"memory", false},
-	{"mongodb", true},
-}
-
-// securityCatalogMongoConfig returns a STORAGE=mongo config for a fresh database test_<random hex>
-// and a handle on it. The test is skipped without MONGO_TEST_URI. The database is dropped when the
-// test ends.
-func securityCatalogMongoConfig(t *testing.T) (bootstrap.Config, *mongo.Database) {
-	t.Helper()
-	uri := os.Getenv("MONGO_TEST_URI")
-	if uri == "" {
-		t.Skip("MONGO_TEST_URI is not set; skipping MongoDB e2e test")
-	}
-	var suffix [8]byte
-	if _, err := rand.Read(suffix[:]); err != nil {
-		t.Fatal(err)
-	}
-	name := "test_" + hex.EncodeToString(suffix[:])
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	client, err := mongo.Connect(options.Client().ApplyURI(uri))
-	if err != nil {
-		t.Fatalf("connect to MongoDB: %v", err)
-	}
-	if err := client.Ping(ctx, nil); err != nil {
-		_ = client.Disconnect(ctx)
-		t.Fatalf("ping MongoDB: %v", err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = client.Database(name).Drop(ctx)
-		_ = client.Disconnect(ctx)
-	})
-	cfg := bootstrap.Config{Storage: bootstrap.StorageMongo, MongoURI: uri, MongoDB: name, RateLimit: generousLimits()}
-	return cfg, client.Database(name)
-}
-
 // securityCatalogServe starts the application for cfg behind an httptest server.
 func securityCatalogServe(t *testing.T, cfg bootstrap.Config, db *mongo.Database) securityCatalogEnv {
 	t.Helper()
-	if cfg.RateLimit.MaxClients == 0 {
-		cfg.RateLimit = generousLimits() // every request comes from loopback
-	}
-	app, err := bootstrap.New(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("bootstrap.New: %v", err)
-	}
-	srv := httptest.NewServer(app.Handler)
-	t.Cleanup(func() {
-		srv.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = app.Close(ctx)
-	})
-	return securityCatalogEnv{url: srv.URL, app: app, db: db}
+	env := e2eServe(t, cfg, db)
+	return securityCatalogEnv{url: env.URL, app: env.App, db: env.DB}
 }
 
-// securityCatalogStart starts a fresh application on memory storage, or on a fresh MongoDB database.
-func securityCatalogStart(t *testing.T, useMongo bool) securityCatalogEnv {
+// securityCatalogStart starts a fresh application on a fresh MongoDB database.
+func securityCatalogStart(t *testing.T) securityCatalogEnv {
 	t.Helper()
-	cfg := bootstrap.Config{Storage: bootstrap.StorageMemory}
-	var db *mongo.Database
-	if useMongo {
-		cfg, db = securityCatalogMongoConfig(t)
-	}
+	cfg, db := e2eMongoConfig(t)
 	return securityCatalogServe(t, cfg, db)
-}
-
-// securityCatalogEach runs fn once per repository.
-func securityCatalogEach(t *testing.T, fn func(t *testing.T, env securityCatalogEnv)) {
-	t.Helper()
-	for _, b := range securityCatalogBackends {
-		t.Run(b.name, func(t *testing.T) { fn(t, securityCatalogStart(t, b.mongo)) })
-	}
 }
 
 type securityCatalogResp struct {
@@ -386,133 +314,130 @@ func TestSecurityCatalogJSONOfTheWrongShapeIsRejected(t *testing.T) {
 		"NUL byte in the body":      append([]byte{0}, securityCatalogBook(1, nil)...),
 		"duplicate key, bad second": []byte(`{"isbn":"` + securityCatalogISBN(1) + `","title":"x","authors":["a"],"title":{"$ne":1}}`),
 	}
-	securityCatalogEach(t, func(t *testing.T, env securityCatalogEnv) {
-		check := func(what string, res securityCatalogResp) {
-			t.Helper()
-			if res.status != http.StatusBadRequest {
-				t.Errorf("%s: %.200s, want 400", what, res)
-				return
-			}
-			securityCatalogRequireClean(t, what, res)
+	env := securityCatalogStart(t)
+	check := func(what string, res securityCatalogResp) {
+		t.Helper()
+		if res.status != http.StatusBadRequest {
+			t.Errorf("%s: %.200s, want 400", what, res)
+			return
 		}
-		for _, f := range fields {
-			for _, v := range f.values {
-				check(fmt.Sprintf("POST %s=%s", f.name, v), securityCatalogPost(t, env, securityCatalogBook(1, map[string]any{f.name: v})))
-			}
+		securityCatalogRequireClean(t, what, res)
+	}
+	for _, f := range fields {
+		for _, v := range f.values {
+			check(fmt.Sprintf("POST %s=%s", f.name, v), securityCatalogPost(t, env, securityCatalogBook(1, map[string]any{f.name: v})))
 		}
-		for what, body := range shapes {
-			check("POST "+what, securityCatalogPost(t, env, body))
-		}
-		securityCatalogRequireEmpty(t, env)
+	}
+	for what, body := range shapes {
+		check("POST "+what, securityCatalogPost(t, env, body))
+	}
+	securityCatalogRequireEmpty(t, env)
 
-		// The same on update, plus the version: a rejected update changes nothing.
-		book := securityCatalogCreate(t, env, 1, "Alice")
-		for _, f := range fields {
-			for _, v := range f.values {
-				check(fmt.Sprintf("PUT %s=%s", f.name, v), securityCatalogPut(t, env, book.ID, securityCatalogUpdate(1, 1, map[string]any{f.name: v})))
-			}
+	// The same on update, plus the version: a rejected update changes nothing.
+	book := securityCatalogCreate(t, env, 1, "Alice")
+	for _, f := range fields {
+		for _, v := range f.values {
+			check(fmt.Sprintf("PUT %s=%s", f.name, v), securityCatalogPut(t, env, book.ID, securityCatalogUpdate(1, 1, map[string]any{f.name: v})))
 		}
-		for _, v := range []json.RawMessage{raw(`{"$gte":0}`), raw(`{"$ne":1}`), raw(`[1]`), raw(`"1"`), raw(`null`), raw(`1.5`), raw(`1e0`)} {
-			check("PUT version="+string(v), securityCatalogPut(t, env, book.ID, securityCatalogUpdate(1, 1, map[string]any{"version": v})))
-		}
-		for what, body := range shapes {
-			check("PUT "+what, securityCatalogPut(t, env, book.ID, body))
-		}
-		got := securityCatalogGet(t, env, fmt.Sprintf("/api/books/%d", book.ID))
-		var b securityCatalogBookDoc
-		if err := json.Unmarshal(got.body, &b); err != nil || b.Version != 1 || b.Title != "Clean Code" || !slices.Equal(b.Authors, []string{"Alice"}) {
-			t.Errorf("rejected updates changed the book: %s", got)
-		}
-		if l := securityCatalogList(t, env, ""); l.Total != 1 {
-			t.Errorf("total = %d, want 1", l.Total)
-		}
-	})
+	}
+	for _, v := range []json.RawMessage{raw(`{"$gte":0}`), raw(`{"$ne":1}`), raw(`[1]`), raw(`"1"`), raw(`null`), raw(`1.5`), raw(`1e0`)} {
+		check("PUT version="+string(v), securityCatalogPut(t, env, book.ID, securityCatalogUpdate(1, 1, map[string]any{"version": v})))
+	}
+	for what, body := range shapes {
+		check("PUT "+what, securityCatalogPut(t, env, book.ID, body))
+	}
+	got := securityCatalogGet(t, env, fmt.Sprintf("/api/books/%d", book.ID))
+	var b securityCatalogBookDoc
+	if err := json.Unmarshal(got.body, &b); err != nil || b.Version != 1 || b.Title != "Clean Code" || !slices.Equal(b.Authors, []string{"Alice"}) {
+		t.Errorf("rejected updates changed the book: %s", got)
+	}
+	if l := securityCatalogList(t, env, ""); l.Total != 1 {
+		t.Errorf("total = %d, want 1", l.Total)
+	}
 }
 
 func TestSecurityCatalogAuthorFilterNeverBecomesAnOperator(t *testing.T) {
-	securityCatalogEach(t, func(t *testing.T, env securityCatalogEnv) {
-		// Three distinct authors, so that any operator reading of the filter selects a proper,
-		// non-empty subset: $ne Alice -> {Bob, Carol}, $regex Al -> {Alice}, $in [Alice] -> {Alice}.
-		alice := securityCatalogCreate(t, env, 1, "Alice")
-		bob := securityCatalogCreate(t, env, 2, "Bob")
-		carol := securityCatalogCreate(t, env, 3, "Carol")
-		all := []int64{alice.ID, bob.ID, carol.ID}
+	env := securityCatalogStart(t)
+	// Three distinct authors, so that any operator reading of the filter selects a proper,
+	// non-empty subset: $ne Alice -> {Bob, Carol}, $regex Al -> {Alice}, $in [Alice] -> {Alice}.
+	alice := securityCatalogCreate(t, env, 1, "Alice")
+	bob := securityCatalogCreate(t, env, 2, "Bob")
+	carol := securityCatalogCreate(t, env, 3, "Carol")
+	all := []int64{alice.ID, bob.ID, carol.ID}
 
-		// A request may be rejected, may have its odd parameter ignored (all books), or may treat
-		// the value as the literal author name. Nothing else is allowed.
-		for _, tc := range []struct {
-			query   string
-			literal []int64 // the result of an exact match of the value, as the API means it
-		}{
-			{"?author[$ne]=Alice", all},
-			{"?author[$regex]=Al", all},
-			{"?author[$regex]=.*", all},
-			{"?author[$in][]=Alice", all},
-			{"?author[$in]=Alice", all},
-			{"?author[$gt]=", all},
-			{"?author[$exists]=true", all},
-			{"?author.$ne=Alice", all},
-			{"?author[0]=Alice", all},
-			{"?$or[0][authors]=Alice", all},
-			{"?$where=sleep(3000)", all},
-			{"?authors=Alice", all},
-			{"?author=Bob&author[$ne]=Bob", []int64{bob.ID}},
-			{"?author=%24ne", nil},
-			{"?author=%7B%22%24ne%22%3A%22Alice%22%7D", nil},
-			{"?author=%7B%22%24regex%22%3A%22.%2A%22%7D", nil},
-			{"?author=Al", nil},
-			{"?author=.%2A", nil},
-			{"?author=Alice%20", nil},
-			{"?author=ALICE", nil},
-		} {
-			start := time.Now()
-			res := securityCatalogGet(t, env, "/api/books"+tc.query)
-			if d := time.Since(start); d > 2*time.Second {
-				t.Errorf("GET %s took %v: the value looks like it was executed", tc.query, d)
-			}
-			if res.status == http.StatusBadRequest {
-				securityCatalogRequireClean(t, tc.query, res)
-				continue
-			}
-			if res.status != http.StatusOK {
-				t.Errorf("GET %s: %.200s, want 200 or 400", tc.query, res)
-				continue
-			}
-			var l securityCatalogListDoc
-			if err := json.Unmarshal(res.body, &l); err != nil {
-				t.Fatal(err)
-			}
-			got := l.ids()
-			if !slices.Equal(got, all) && !slices.Equal(got, tc.literal) {
-				t.Errorf("GET %s returned books %v, want all %v (parameter ignored) or %v (literal match)", tc.query, got, all, tc.literal)
-			}
-			if l.Total != int64(len(got)) {
-				t.Errorf("GET %s: total %d with %d items", tc.query, l.Total, len(got))
-			}
+	// A request may be rejected, may have its odd parameter ignored (all books), or may treat
+	// the value as the literal author name. Nothing else is allowed.
+	for _, tc := range []struct {
+		query   string
+		literal []int64 // the result of an exact match of the value, as the API means it
+	}{
+		{"?author[$ne]=Alice", all},
+		{"?author[$regex]=Al", all},
+		{"?author[$regex]=.*", all},
+		{"?author[$in][]=Alice", all},
+		{"?author[$in]=Alice", all},
+		{"?author[$gt]=", all},
+		{"?author[$exists]=true", all},
+		{"?author.$ne=Alice", all},
+		{"?author[0]=Alice", all},
+		{"?$or[0][authors]=Alice", all},
+		{"?$where=sleep(3000)", all},
+		{"?authors=Alice", all},
+		{"?author=Bob&author[$ne]=Bob", []int64{bob.ID}},
+		{"?author=%24ne", nil},
+		{"?author=%7B%22%24ne%22%3A%22Alice%22%7D", nil},
+		{"?author=%7B%22%24regex%22%3A%22.%2A%22%7D", nil},
+		{"?author=Al", nil},
+		{"?author=.%2A", nil},
+		{"?author=Alice%20", nil},
+		{"?author=ALICE", nil},
+	} {
+		start := time.Now()
+		res := securityCatalogGet(t, env, "/api/books"+tc.query)
+		if d := time.Since(start); d > 2*time.Second {
+			t.Errorf("GET %s took %v: the value looks like it was executed", tc.query, d)
 		}
-	})
+		if res.status == http.StatusBadRequest {
+			securityCatalogRequireClean(t, tc.query, res)
+			continue
+		}
+		if res.status != http.StatusOK {
+			t.Errorf("GET %s: %.200s, want 200 or 400", tc.query, res)
+			continue
+		}
+		var l securityCatalogListDoc
+		if err := json.Unmarshal(res.body, &l); err != nil {
+			t.Fatal(err)
+		}
+		got := l.ids()
+		if !slices.Equal(got, all) && !slices.Equal(got, tc.literal) {
+			t.Errorf("GET %s returned books %v, want all %v (parameter ignored) or %v (literal match)", tc.query, got, all, tc.literal)
+		}
+		if l.Total != int64(len(got)) {
+			t.Errorf("GET %s: total %d with %d items", tc.query, l.Total, len(got))
+		}
+	}
 }
 
 func TestSecurityCatalogOperatorLookingAuthorNamesStayText(t *testing.T) {
-	securityCatalogEach(t, func(t *testing.T, env securityCatalogEnv) {
-		names := []string{`{"$ne":""}`, `$where`, `$ne`, `.*`, `a.b`, `{"$gt":""}`, `Robert'); DROP TABLE books;--`}
-		for i, name := range names {
-			securityCatalogCreate(t, env, i+1, name, "Plain Author")
+	env := securityCatalogStart(t)
+	names := []string{`{"$ne":""}`, `$where`, `$ne`, `.*`, `a.b`, `{"$gt":""}`, `Robert'); DROP TABLE books;--`}
+	for i, name := range names {
+		securityCatalogCreate(t, env, i+1, name, "Plain Author")
+	}
+	securityCatalogCreate(t, env, 100, "Someone Else")
+	for i, name := range names {
+		l := securityCatalogList(t, env, "?author="+url.QueryEscape(name))
+		if l.Total != 1 || len(l.Items) != 1 || l.Items[0].Isbn != securityCatalogISBN(i+1) {
+			t.Errorf("author %q matched %d books (%v), want exactly the book that has it", name, l.Total, l.ids())
 		}
-		securityCatalogCreate(t, env, 100, "Someone Else")
-		for i, name := range names {
-			l := securityCatalogList(t, env, "?author="+url.QueryEscape(name))
-			if l.Total != 1 || len(l.Items) != 1 || l.Items[0].Isbn != securityCatalogISBN(i+1) {
-				t.Errorf("author %q matched %d books (%v), want exactly the book that has it", name, l.Total, l.ids())
-			}
-			if !slices.Contains(l.Items[0].Authors, name) {
-				t.Errorf("author %q was stored as %q", name, l.Items[0].Authors)
-			}
+		if !slices.Contains(l.Items[0].Authors, name) {
+			t.Errorf("author %q was stored as %q", name, l.Items[0].Authors)
 		}
-		if l := securityCatalogList(t, env, "?author=Plain%20Author"); l.Total != int64(len(names)) {
-			t.Errorf("Plain Author total = %d, want %d", l.Total, len(names))
-		}
-	})
+	}
+	if l := securityCatalogList(t, env, "?author=Plain%20Author"); l.Total != int64(len(names)) {
+		t.Errorf("Plain Author total = %d, want %d", l.Total, len(names))
+	}
 }
 
 // --- the author filter and other list parameters ------------------------------------------------
@@ -520,63 +445,61 @@ func TestSecurityCatalogOperatorLookingAuthorNamesStayText(t *testing.T) {
 // Valid but unusual filters. Filters that are not valid text are in
 // TestSecurityCatalogAuthorFilterFollowsTheTextRules.
 func TestSecurityCatalogOddAuthorFiltersAreNeverAServerError(t *testing.T) {
-	securityCatalogEach(t, func(t *testing.T, env securityCatalogEnv) {
-		securityCatalogCreate(t, env, 1, "Alice")
-		for name, query := range map[string]string{
-			"zero width space":         "?author=%e2%80%8b",
-			"percent-encoded operator": "?author=%7B%22%24ne%22%3A%22%22%7D",
-			"200 two-byte characters":  "?author=" + strings.Repeat("%C3%A9", 200),
-			"200 four-byte characters": "?author=" + strings.Repeat("%F0%9F%98%80", 200),
-			"empty":                    "?author=",
-			"offset at the limit":      "?offset=100000",
-			"limit and offset at max":  "?limit=100&offset=100000&author=Alice",
-		} {
-			start := time.Now()
-			res := securityCatalogGet(t, env, "/api/books"+query)
-			if res.status != http.StatusOK && res.status != http.StatusBadRequest {
-				t.Errorf("%s (GET %.60s): %.200s, want 200 or 400", name, query, res)
-				continue
-			}
-			if res.status == http.StatusBadRequest {
-				securityCatalogRequireClean(t, name, res)
-			}
-			if d := time.Since(start); d > 3*time.Second {
-				t.Errorf("%s: took %v", name, d)
-			}
+	env := securityCatalogStart(t)
+	securityCatalogCreate(t, env, 1, "Alice")
+	for name, query := range map[string]string{
+		"zero width space":         "?author=%e2%80%8b",
+		"percent-encoded operator": "?author=%7B%22%24ne%22%3A%22%22%7D",
+		"200 two-byte characters":  "?author=" + strings.Repeat("%C3%A9", 200),
+		"200 four-byte characters": "?author=" + strings.Repeat("%F0%9F%98%80", 200),
+		"empty":                    "?author=",
+		"offset at the limit":      "?offset=100000",
+		"limit and offset at max":  "?limit=100&offset=100000&author=Alice",
+	} {
+		start := time.Now()
+		res := securityCatalogGet(t, env, "/api/books"+query)
+		if res.status != http.StatusOK && res.status != http.StatusBadRequest {
+			t.Errorf("%s (GET %.60s): %.200s, want 200 or 400", name, query, res)
+			continue
 		}
-		// A name of the longest legal size can be looked up by exact match: the bound counts
-		// characters, as the domain does, not bytes.
-		long := strings.Repeat("é", 200)
-		securityCatalogCreate(t, env, 2, long)
-		if l := securityCatalogList(t, env, "?author="+strings.Repeat("%C3%A9", 200)); l.Total != 1 {
-			t.Errorf("filter by a 200-character author matched %d books, want 1", l.Total)
+		if res.status == http.StatusBadRequest {
+			securityCatalogRequireClean(t, name, res)
 		}
-	})
+		if d := time.Since(start); d > 3*time.Second {
+			t.Errorf("%s: took %v", name, d)
+		}
+	}
+	// A name of the longest legal size can be looked up by exact match: the bound counts
+	// characters, as the domain does, not bytes.
+	long := strings.Repeat("é", 200)
+	securityCatalogCreate(t, env, 2, long)
+	if l := securityCatalogList(t, env, "?author="+strings.Repeat("%C3%A9", 200)); l.Total != 1 {
+		t.Errorf("filter by a 200-character author matched %d books, want 1", l.Total)
+	}
 }
 
 func TestSecurityCatalogAuthorFilterFollowsTheTextRules(t *testing.T) {
-	securityCatalogEach(t, func(t *testing.T, env securityCatalogEnv) {
-		securityCatalogCreate(t, env, 1, "Alice")
-		for name, query := range map[string]string{
-			"invalid UTF-8":         "?author=%ff",
-			"overlong UTF-8":        "?author=%c0%af",
-			"lone surrogate (CESU)": "?author=%ed%a0%80",
-			"NUL":                   "?author=a%00b",
-			"newline":               "?author=Alice%0a",
-			"CRLF":                  "?author=Alice%0d%0a",
-			"DEL":                   "?author=Alice%7f",
-		} {
-			res := securityCatalogGet(t, env, "/api/books"+query)
-			if res.status != http.StatusBadRequest {
-				t.Errorf("%s: %.200s, want 400: no stored name can contain it, and it should not reach the database", name, res)
-				continue
-			}
-			if msg := res.message(t); !strings.Contains(msg, "author") {
-				t.Errorf("%s: message %q does not name the author parameter", name, msg)
-			}
-			securityCatalogRequireClean(t, name, res)
+	env := securityCatalogStart(t)
+	securityCatalogCreate(t, env, 1, "Alice")
+	for name, query := range map[string]string{
+		"invalid UTF-8":         "?author=%ff",
+		"overlong UTF-8":        "?author=%c0%af",
+		"lone surrogate (CESU)": "?author=%ed%a0%80",
+		"NUL":                   "?author=a%00b",
+		"newline":               "?author=Alice%0a",
+		"CRLF":                  "?author=Alice%0d%0a",
+		"DEL":                   "?author=Alice%7f",
+	} {
+		res := securityCatalogGet(t, env, "/api/books"+query)
+		if res.status != http.StatusBadRequest {
+			t.Errorf("%s: %.200s, want 400: no stored name can contain it, and it should not reach the database", name, res)
+			continue
 		}
-	})
+		if msg := res.message(t); !strings.Contains(msg, "author") {
+			t.Errorf("%s: message %q does not name the author parameter", name, msg)
+		}
+		securityCatalogRequireClean(t, name, res)
+	}
 }
 
 // --- text that looks empty but is not ----------------------------------------------------------
@@ -594,53 +517,52 @@ func TestSecurityCatalogTextWithoutAVisibleCharacterIsRejected(t *testing.T) {
 		"several of them with spaces": " " + securityCatalogRune(0x200B) + " " + securityCatalogRune(0xFEFF) + securityCatalogRune(0x200D) + " ",
 	}
 	emoji := securityCatalogRune(0x1F469) + securityCatalogRune(0x200D) + securityCatalogRune(0x1F4BB)
-	securityCatalogEach(t, func(t *testing.T, env securityCatalogEnv) {
-		n := 0
-		for name, s := range invisible {
-			for _, tc := range []struct {
-				field string
-				over  map[string]any
-			}{
-				{"title", map[string]any{"title": s}},
-				{"authors", map[string]any{"authors": []string{s}}},
-				{"authors", map[string]any{"authors": []string{"Visible Author", s}}},
-			} {
-				n++ // a distinct ISBN, so that one stored book cannot turn later cases into 409s
-				res := securityCatalogPost(t, env, securityCatalogBook(n, tc.over))
-				if res.status != http.StatusBadRequest {
-					t.Errorf("POST %s as %s: %.200s, want 400", name, tc.field, res)
-				} else if msg := res.message(t); !strings.Contains(msg, tc.field) {
-					t.Errorf("POST %s as %s: message %q does not name the field", name, tc.field, msg)
-				}
-			}
-		}
-		securityCatalogRequireEmpty(t, env)
-
-		book := securityCatalogCreate(t, env, 1, "Alice")
-		for name, s := range invisible {
-			if res := securityCatalogPut(t, env, book.ID, securityCatalogUpdate(1, 1, map[string]any{"title": s})); res.status != http.StatusBadRequest {
-				t.Errorf("PUT %s as title: %.200s, want 400", name, res)
-			}
-			if res := securityCatalogPut(t, env, book.ID, securityCatalogUpdate(1, 1, map[string]any{"authors": []string{s}})); res.status != http.StatusBadRequest {
-				t.Errorf("PUT %s as author: %.200s, want 400", name, res)
-			}
-		}
-
-		// The rule is about text with nothing to see, not about format characters in general.
-		for name, over := range map[string]map[string]any{
-			"emoji sequence with a joiner": {"title": emoji},
-			"invisible next to a letter":   {"title": "Go" + securityCatalogRune(0x200B)},
+	env := securityCatalogStart(t)
+	n := 0
+	for name, s := range invisible {
+		for _, tc := range []struct {
+			field string
+			over  map[string]any
+		}{
+			{"title", map[string]any{"title": s}},
+			{"authors", map[string]any{"authors": []string{s}}},
+			{"authors", map[string]any{"authors": []string{"Visible Author", s}}},
 		} {
-			res := securityCatalogPost(t, env, securityCatalogBook(2, over))
-			if res.status != http.StatusCreated {
-				t.Errorf("%s: %.200s, want 201", name, res)
-			}
-			var b securityCatalogBookDoc
-			if err := json.Unmarshal(res.body, &b); err == nil {
-				securityCatalogDelete(t, env, b.ID)
+			n++ // a distinct ISBN, so that one stored book cannot turn later cases into 409s
+			res := securityCatalogPost(t, env, securityCatalogBook(n, tc.over))
+			if res.status != http.StatusBadRequest {
+				t.Errorf("POST %s as %s: %.200s, want 400", name, tc.field, res)
+			} else if msg := res.message(t); !strings.Contains(msg, tc.field) {
+				t.Errorf("POST %s as %s: message %q does not name the field", name, tc.field, msg)
 			}
 		}
-	})
+	}
+	securityCatalogRequireEmpty(t, env)
+
+	book := securityCatalogCreate(t, env, 1, "Alice")
+	for name, s := range invisible {
+		if res := securityCatalogPut(t, env, book.ID, securityCatalogUpdate(1, 1, map[string]any{"title": s})); res.status != http.StatusBadRequest {
+			t.Errorf("PUT %s as title: %.200s, want 400", name, res)
+		}
+		if res := securityCatalogPut(t, env, book.ID, securityCatalogUpdate(1, 1, map[string]any{"authors": []string{s}})); res.status != http.StatusBadRequest {
+			t.Errorf("PUT %s as author: %.200s, want 400", name, res)
+		}
+	}
+
+	// The rule is about text with nothing to see, not about format characters in general.
+	for name, over := range map[string]map[string]any{
+		"emoji sequence with a joiner": {"title": emoji},
+		"invisible next to a letter":   {"title": "Go" + securityCatalogRune(0x200B)},
+	} {
+		res := securityCatalogPost(t, env, securityCatalogBook(2, over))
+		if res.status != http.StatusCreated {
+			t.Errorf("%s: %.200s, want 201", name, res)
+		}
+		var b securityCatalogBookDoc
+		if err := json.Unmarshal(res.body, &b); err == nil {
+			securityCatalogDelete(t, env, b.ID)
+		}
+	}
 }
 
 // --- ISBN: ASCII digits only, one spelling per book --------------------------------------------
@@ -687,147 +609,144 @@ func TestSecurityCatalogISBNAcceptsOnlyASCIIDigitsHyphensAndSpaces(t *testing.T)
 		"only separators":              "- - -",
 	}
 	good := []string{base, withSeparator("-"), withSeparator(" "), " " + base + " ", base[:3] + "-" + base[3:4] + "-" + base[4:6] + "-" + base[6:12] + "-" + base[12:]}
-	securityCatalogEach(t, func(t *testing.T, env securityCatalogEnv) {
-		for name, isbn := range bad {
-			res := securityCatalogPost(t, env, securityCatalogBook(1, map[string]any{"isbn": isbn}))
-			if res.status != http.StatusBadRequest {
-				t.Errorf("POST %s: %.200s, want 400", name, res)
-				continue
-			}
-			if msg := res.message(t); !strings.HasPrefix(msg, "isbn:") {
-				t.Errorf("POST %s: message %q does not name the isbn field", name, msg)
-			}
-			securityCatalogRequireClean(t, name, res)
+	env := securityCatalogStart(t)
+	for name, isbn := range bad {
+		res := securityCatalogPost(t, env, securityCatalogBook(1, map[string]any{"isbn": isbn}))
+		if res.status != http.StatusBadRequest {
+			t.Errorf("POST %s: %.200s, want 400", name, res)
+			continue
 		}
-		securityCatalogRequireEmpty(t, env)
+		if msg := res.message(t); !strings.HasPrefix(msg, "isbn:") {
+			t.Errorf("POST %s: message %q does not name the isbn field", name, msg)
+		}
+		securityCatalogRequireClean(t, name, res)
+	}
+	securityCatalogRequireEmpty(t, env)
 
-		book := securityCatalogCreate(t, env, 2, "Alice")
-		for name, isbn := range bad {
-			if res := securityCatalogPut(t, env, book.ID, securityCatalogUpdate(2, 1, map[string]any{"isbn": isbn})); res.status != http.StatusBadRequest {
-				t.Errorf("PUT %s: %.200s, want 400", name, res)
-			}
+	book := securityCatalogCreate(t, env, 2, "Alice")
+	for name, isbn := range bad {
+		if res := securityCatalogPut(t, env, book.ID, securityCatalogUpdate(2, 1, map[string]any{"isbn": isbn})); res.status != http.StatusBadRequest {
+			t.Errorf("PUT %s: %.200s, want 400", name, res)
 		}
-		if got := securityCatalogGet(t, env, fmt.Sprintf("/api/books/%d", book.ID)); !strings.Contains(string(got.body), securityCatalogISBN(2)) {
-			t.Errorf("rejected updates changed the ISBN: %s", got)
-		}
+	}
+	if got := securityCatalogGet(t, env, fmt.Sprintf("/api/books/%d", book.ID)); !strings.Contains(string(got.body), securityCatalogISBN(2)) {
+		t.Errorf("rejected updates changed the ISBN: %s", got)
+	}
 
-		// The accepted spellings are stored in the one canonical form, so they cannot be
-		// told apart from each other later.
-		securityCatalogDelete(t, env, book.ID)
-		for i, isbn := range good {
-			res := securityCatalogPost(t, env, securityCatalogBook(1, map[string]any{"isbn": isbn}))
-			if i == 0 && res.status != http.StatusCreated {
-				t.Fatalf("POST %q: %.200s, want 201", isbn, res)
-			}
-			if i > 0 && res.status != http.StatusConflict {
-				t.Errorf("POST %q again: %.200s, want 409", isbn, res)
-			}
-			if res.status == http.StatusCreated {
-				var b securityCatalogBookDoc
-				_ = json.Unmarshal(res.body, &b)
-				if b.Isbn != base {
-					t.Errorf("stored isbn %q, want the canonical %q", b.Isbn, base)
-				}
+	// The accepted spellings are stored in the one canonical form, so they cannot be
+	// told apart from each other later.
+	securityCatalogDelete(t, env, book.ID)
+	for i, isbn := range good {
+		res := securityCatalogPost(t, env, securityCatalogBook(1, map[string]any{"isbn": isbn}))
+		if i == 0 && res.status != http.StatusCreated {
+			t.Fatalf("POST %q: %.200s, want 201", isbn, res)
+		}
+		if i > 0 && res.status != http.StatusConflict {
+			t.Errorf("POST %q again: %.200s, want 409", isbn, res)
+		}
+		if res.status == http.StatusCreated {
+			var b securityCatalogBookDoc
+			_ = json.Unmarshal(res.body, &b)
+			if b.Isbn != base {
+				t.Errorf("stored isbn %q, want the canonical %q", b.Isbn, base)
 			}
 		}
-		if l := securityCatalogList(t, env, ""); l.Total != 1 {
-			t.Errorf("total = %d after %d spellings of one ISBN, want 1", l.Total, len(good))
-		}
-	})
+	}
+	if l := securityCatalogList(t, env, ""); l.Total != 1 {
+		t.Errorf("total = %d after %d spellings of one ISBN, want 1", l.Total, len(good))
+	}
 }
 
 func TestSecurityCatalogOneBookHasOneISBNWhateverTheSpelling(t *testing.T) {
-	securityCatalogEach(t, func(t *testing.T, env securityCatalogEnv) {
-		first := securityCatalogCreate(t, env, 1, "Alice")
-		second := securityCatalogCreate(t, env, 2, "Bob")
-		isbn := securityCatalogISBN(1)
-		spelled := isbn[:3] + "-" + isbn[3:4] + " " + isbn[4:]
+	env := securityCatalogStart(t)
+	first := securityCatalogCreate(t, env, 1, "Alice")
+	second := securityCatalogCreate(t, env, 2, "Bob")
+	isbn := securityCatalogISBN(1)
+	spelled := isbn[:3] + "-" + isbn[3:4] + " " + isbn[4:]
 
-		// PUT onto another book's ISBN in a different spelling is the same conflict.
-		res := securityCatalogPut(t, env, second.ID, securityCatalogUpdate(2, 1, map[string]any{"isbn": spelled}))
-		if res.status != http.StatusConflict {
-			t.Errorf("PUT onto %q: %.200s, want 409", spelled, res)
-		}
-		// A book may keep its own ISBN, written another way.
-		res = securityCatalogPut(t, env, first.ID, securityCatalogUpdate(1, 1, map[string]any{"isbn": spelled}))
-		if res.status != http.StatusOK {
-			t.Fatalf("PUT own ISBN respelled: %.200s, want 200", res)
-		}
-		var b securityCatalogBookDoc
-		if err := json.Unmarshal(res.body, &b); err != nil || b.Isbn != isbn || b.Version != 2 {
-			t.Errorf("respelled update returned %s, want isbn %s and version 2", res, isbn)
-		}
-		// Moving away frees the old ISBN for others; the new one is taken.
-		moved := securityCatalogISBN(3)
-		if res := securityCatalogPut(t, env, first.ID, securityCatalogUpdate(1, 2, map[string]any{"isbn": moved})); res.status != http.StatusOK {
-			t.Fatalf("PUT move: %.200s, want 200", res)
-		}
-		if res := securityCatalogPost(t, env, securityCatalogBook(1, nil)); res.status != http.StatusCreated {
-			t.Errorf("POST the freed ISBN: %.200s, want 201", res)
-		}
-		if res := securityCatalogPost(t, env, securityCatalogBook(3, nil)); res.status != http.StatusConflict {
-			t.Errorf("POST the new ISBN of the moved book: %.200s, want 409", res)
-		}
-	})
+	// PUT onto another book's ISBN in a different spelling is the same conflict.
+	res := securityCatalogPut(t, env, second.ID, securityCatalogUpdate(2, 1, map[string]any{"isbn": spelled}))
+	if res.status != http.StatusConflict {
+		t.Errorf("PUT onto %q: %.200s, want 409", spelled, res)
+	}
+	// A book may keep its own ISBN, written another way.
+	res = securityCatalogPut(t, env, first.ID, securityCatalogUpdate(1, 1, map[string]any{"isbn": spelled}))
+	if res.status != http.StatusOK {
+		t.Fatalf("PUT own ISBN respelled: %.200s, want 200", res)
+	}
+	var b securityCatalogBookDoc
+	if err := json.Unmarshal(res.body, &b); err != nil || b.Isbn != isbn || b.Version != 2 {
+		t.Errorf("respelled update returned %s, want isbn %s and version 2", res, isbn)
+	}
+	// Moving away frees the old ISBN for others; the new one is taken.
+	moved := securityCatalogISBN(3)
+	if res := securityCatalogPut(t, env, first.ID, securityCatalogUpdate(1, 2, map[string]any{"isbn": moved})); res.status != http.StatusOK {
+		t.Fatalf("PUT move: %.200s, want 200", res)
+	}
+	if res := securityCatalogPost(t, env, securityCatalogBook(1, nil)); res.status != http.StatusCreated {
+		t.Errorf("POST the freed ISBN: %.200s, want 201", res)
+	}
+	if res := securityCatalogPost(t, env, securityCatalogBook(3, nil)); res.status != http.StatusConflict {
+		t.Errorf("POST the new ISBN of the moved book: %.200s, want 409", res)
+	}
 }
 
 // --- error bodies --------------------------------------------------------------------------------
 
 func TestSecurityCatalogErrorsAreFixedTextsThatNeverEchoInput(t *testing.T) {
 	const marker = "MARKER-7c1e"
-	securityCatalogEach(t, func(t *testing.T, env securityCatalogEnv) {
-		first := securityCatalogCreate(t, env, 1, "Alice")
-		second := securityCatalogCreate(t, env, 2, "Bob")
+	env := securityCatalogStart(t)
+	first := securityCatalogCreate(t, env, 1, "Alice")
+	second := securityCatalogCreate(t, env, 2, "Bob")
 
-		wantBody := func(what string, res securityCatalogResp, status int, message string) {
-			t.Helper()
-			if res.status != status {
-				t.Errorf("%s: %.200s, want %d", what, res, status)
-				return
-			}
-			if got := res.message(t); got != message {
-				t.Errorf("%s: message %q, want %q", what, got, message)
-			}
-			securityCatalogRequireClean(t, what, res)
+	wantBody := func(what string, res securityCatalogResp, status int, message string) {
+		t.Helper()
+		if res.status != status {
+			t.Errorf("%s: %.200s, want %d", what, res, status)
+			return
 		}
-
-		const duplicate = "a book with this ISBN already exists"
-		const conflict = "version conflict: the book was changed since it was read"
-		const notFound = "book not found"
-		wantBody("POST duplicate", securityCatalogPost(t, env, securityCatalogBook(1, map[string]any{"title": marker})), 409, duplicate)
-		wantBody("PUT onto another ISBN", securityCatalogPut(t, env, second.ID, securityCatalogUpdate(1, 1, map[string]any{"title": marker})), 409, duplicate)
-
-		if res := securityCatalogPut(t, env, first.ID, securityCatalogUpdate(1, 1, map[string]any{"title": "Second edition"})); res.status != http.StatusOK {
-			t.Fatalf("PUT: %.200s, want 200", res)
+		if got := res.message(t); got != message {
+			t.Errorf("%s: message %q, want %q", what, got, message)
 		}
-		wantBody("PUT stale version", securityCatalogPut(t, env, first.ID, securityCatalogUpdate(1, 1, map[string]any{"title": marker})), 409, conflict)
+		securityCatalogRequireClean(t, what, res)
+	}
 
-		// An id that never existed and an id that was deleted look the same.
-		securityCatalogDelete(t, env, second.ID)
-		for _, id := range []int64{second.ID, 424242} {
-			wantBody(fmt.Sprintf("GET %d", id), securityCatalogGet(t, env, fmt.Sprintf("/api/books/%d", id)), 404, notFound)
-			wantBody(fmt.Sprintf("PUT %d", id), securityCatalogPut(t, env, id, securityCatalogUpdate(2, 1, nil)), 404, notFound)
-			wantBody(fmt.Sprintf("DELETE %d", id), securityCatalogDelete(t, env, id), 404, notFound)
-		}
+	const duplicate = "a book with this ISBN already exists"
+	const conflict = "version conflict: the book was changed since it was read"
+	const notFound = "book not found"
+	wantBody("POST duplicate", securityCatalogPost(t, env, securityCatalogBook(1, map[string]any{"title": marker})), 409, duplicate)
+	wantBody("PUT onto another ISBN", securityCatalogPut(t, env, second.ID, securityCatalogUpdate(1, 1, map[string]any{"title": marker})), 409, duplicate)
 
-		// Validation messages name the field and the rule, never the value.
-		for name, over := range map[string]map[string]any{
-			"isbn":     {"isbn": marker},
-			"title":    {"title": strings.Repeat(marker, 40)},
-			"authors":  {"authors": []string{marker, strings.Repeat(marker, 40)}},
-			"language": {"language": marker},
-		} {
-			res := securityCatalogPost(t, env, securityCatalogBook(5, over))
-			if res.status != http.StatusBadRequest {
-				t.Errorf("POST bad %s: %.200s, want 400", name, res)
-				continue
-			}
-			if msg := res.message(t); !strings.HasPrefix(msg, name+":") || strings.Contains(msg, marker) {
-				t.Errorf("POST bad %s: message %q must start with the field name and not echo the value", name, msg)
-			}
-			securityCatalogRequireClean(t, "bad "+name, res)
+	if res := securityCatalogPut(t, env, first.ID, securityCatalogUpdate(1, 1, map[string]any{"title": "Second edition"})); res.status != http.StatusOK {
+		t.Fatalf("PUT: %.200s, want 200", res)
+	}
+	wantBody("PUT stale version", securityCatalogPut(t, env, first.ID, securityCatalogUpdate(1, 1, map[string]any{"title": marker})), 409, conflict)
+
+	// An id that never existed and an id that was deleted look the same.
+	securityCatalogDelete(t, env, second.ID)
+	for _, id := range []int64{second.ID, 424242} {
+		wantBody(fmt.Sprintf("GET %d", id), securityCatalogGet(t, env, fmt.Sprintf("/api/books/%d", id)), 404, notFound)
+		wantBody(fmt.Sprintf("PUT %d", id), securityCatalogPut(t, env, id, securityCatalogUpdate(2, 1, nil)), 404, notFound)
+		wantBody(fmt.Sprintf("DELETE %d", id), securityCatalogDelete(t, env, id), 404, notFound)
+	}
+
+	// Validation messages name the field and the rule, never the value.
+	for name, over := range map[string]map[string]any{
+		"isbn":     {"isbn": marker},
+		"title":    {"title": strings.Repeat(marker, 40)},
+		"authors":  {"authors": []string{marker, strings.Repeat(marker, 40)}},
+		"language": {"language": marker},
+	} {
+		res := securityCatalogPost(t, env, securityCatalogBook(5, over))
+		if res.status != http.StatusBadRequest {
+			t.Errorf("POST bad %s: %.200s, want 400", name, res)
+			continue
 		}
-	})
+		if msg := res.message(t); !strings.HasPrefix(msg, name+":") || strings.Contains(msg, marker) {
+			t.Errorf("POST bad %s: message %q must start with the field name and not echo the value", name, msg)
+		}
+		securityCatalogRequireClean(t, "bad "+name, res)
+	}
 }
 
 // A repository error that no adapter maps must come out as the generic 500, whatever the driver or
@@ -835,8 +754,8 @@ func TestSecurityCatalogErrorsAreFixedTextsThatNeverEchoInput(t *testing.T) {
 // (security_books_test.go covers that): a counter that is not a number, and a counter that is
 // behind the data, which makes the next insert collide on _id.
 func TestSecurityCatalogDatabaseErrorsBecomeAGeneric500(t *testing.T) {
-	cfg, db := securityCatalogMongoConfig(t)
-	env := securityCatalogServe(t, cfg, db)
+	env := securityCatalogStart(t)
+	db := env.db
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	counters := db.Collection("counters")
@@ -883,78 +802,77 @@ func TestSecurityCatalogDatabaseErrorsBecomeAGeneric500(t *testing.T) {
 // --- consistency ---------------------------------------------------------------------------------
 
 func TestSecurityCatalogConcurrentCreatesKeepIDsUniqueAndISBNsOnce(t *testing.T) {
-	securityCatalogEach(t, func(t *testing.T, env securityCatalogEnv) {
-		// A fresh catalog: on MongoDB the very first creates race to make the counter document.
-		const books, racers = 30, 2
-		var (
-			mu        sync.Mutex
-			created   = map[int64]int{} // ID -> ISBN number
-			conflicts int
-			wg        sync.WaitGroup
-		)
-		for n := 1; n <= books; n++ {
-			for r := 0; r < racers; r++ {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					res, err := securityCatalogTry(http.MethodPost, env.url+"/api/books", "application/json", securityCatalogBook(n, nil))
-					mu.Lock()
-					defer mu.Unlock()
-					if err != nil {
+	env := securityCatalogStart(t)
+	// A fresh catalog: the very first creates race to make the counter document.
+	const books, racers = 30, 2
+	var (
+		mu        sync.Mutex
+		created   = map[int64]int{} // ID -> ISBN number
+		conflicts int
+		wg        sync.WaitGroup
+	)
+	for n := 1; n <= books; n++ {
+		for r := 0; r < racers; r++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				res, err := securityCatalogTry(http.MethodPost, env.url+"/api/books", "application/json", securityCatalogBook(n, nil))
+				mu.Lock()
+				defer mu.Unlock()
+				if err != nil {
+					t.Errorf("create %d: %v", n, err)
+					return
+				}
+				switch res.status {
+				case http.StatusCreated:
+					var b securityCatalogBookDoc
+					if err := json.Unmarshal(res.body, &b); err != nil {
 						t.Errorf("create %d: %v", n, err)
 						return
 					}
-					switch res.status {
-					case http.StatusCreated:
-						var b securityCatalogBookDoc
-						if err := json.Unmarshal(res.body, &b); err != nil {
-							t.Errorf("create %d: %v", n, err)
-							return
-						}
-						if prev, dup := created[b.ID]; dup {
-							t.Errorf("ID %d was given to ISBN %d and ISBN %d", b.ID, prev, n)
-						}
-						created[b.ID] = n
-					case http.StatusConflict:
-						conflicts++
-					default:
-						t.Errorf("create %d: %.200s, want 201 or 409", n, res)
+					if prev, dup := created[b.ID]; dup {
+						t.Errorf("ID %d was given to ISBN %d and ISBN %d", b.ID, prev, n)
 					}
-				}()
-			}
+					created[b.ID] = n
+				case http.StatusConflict:
+					conflicts++
+				default:
+					t.Errorf("create %d: %.200s, want 201 or 409", n, res)
+				}
+			}()
 		}
-		wg.Wait()
-		if len(created) != books || conflicts != books*(racers-1) {
-			t.Fatalf("%d created and %d conflicts, want %d and %d", len(created), conflicts, books, books*(racers-1))
+	}
+	wg.Wait()
+	if len(created) != books || conflicts != books*(racers-1) {
+		t.Fatalf("%d created and %d conflicts, want %d and %d", len(created), conflicts, books, books*(racers-1))
+	}
+	l := securityCatalogList(t, env, "?limit=100")
+	if l.Total != books {
+		t.Errorf("total = %d, want %d", l.Total, books)
+	}
+	highest := int64(0)
+	for id := range created {
+		if id < 1 {
+			t.Errorf("ID %d is not positive", id)
 		}
-		l := securityCatalogList(t, env, "?limit=100")
-		if l.Total != books {
-			t.Errorf("total = %d, want %d", l.Total, books)
-		}
-		highest := int64(0)
-		for id := range created {
-			if id < 1 {
-				t.Errorf("ID %d is not positive", id)
-			}
-			highest = max(highest, id)
-		}
+		highest = max(highest, id)
+	}
 
-		// A removed ID is never given out again, not even when it was the highest.
-		if res := securityCatalogDelete(t, env, highest); res.status != http.StatusNoContent {
-			t.Fatalf("DELETE %d: %.200s", highest, res)
-		}
-		next := securityCatalogCreate(t, env, books+1, "Alice")
-		if next.ID <= highest {
-			t.Errorf("new book got ID %d after ID %d was removed, want a greater one", next.ID, highest)
-		}
-	})
+	// A removed ID is never given out again, not even when it was the highest.
+	if res := securityCatalogDelete(t, env, highest); res.status != http.StatusNoContent {
+		t.Fatalf("DELETE %d: %.200s", highest, res)
+	}
+	next := securityCatalogCreate(t, env, books+1, "Alice")
+	if next.ID <= highest {
+		t.Errorf("new book got ID %d after ID %d was removed, want a greater one", next.ID, highest)
+	}
 }
 
 // A process that dies between taking an ID from the counter and inserting the book leaves a gap,
 // nothing else: no duplicate, no reuse, no error for the next caller.
 func TestSecurityCatalogACrashAfterTheCounterOnlyLeavesAGap(t *testing.T) {
-	cfg, db := securityCatalogMongoConfig(t)
-	env := securityCatalogServe(t, cfg, db)
+	env := securityCatalogStart(t)
+	db := env.db
 	first := securityCatalogCreate(t, env, 1, "Alice")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -998,15 +916,20 @@ func TestSecurityCatalogDemoSeedingIsOptIn(t *testing.T) {
 		t.Error("SeedDemoData is on without SEED_DEMO_DATA")
 	}
 
-	// A zero Config serves an empty catalog.
-	env := securityCatalogServe(t, bootstrap.Config{}, nil)
-	securityCatalogRequireEmpty(t, env)
+	// A config that leaves SeedDemoData off serves an empty catalog.
+	cfg, db := e2eMongoConfig(t)
+	if cfg.SeedDemoData {
+		t.Fatal("e2eMongoConfig turns demo seeding on")
+	}
+	securityCatalogRequireEmpty(t, securityCatalogServe(t, cfg, db))
 }
 
 func TestSecurityCatalogSeedingLogsOnlyASummaryAtInfo(t *testing.T) {
 	var logs securityCatalogLogBuffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	env := securityCatalogServe(t, bootstrap.Config{Storage: bootstrap.StorageMemory, SeedDemoData: true, Logger: logger}, nil)
+	cfg, db := e2eMongoConfig(t)
+	cfg.SeedDemoData, cfg.Logger = true, logger
+	env := securityCatalogServe(t, cfg, db)
 	if l := securityCatalogList(t, env, "?limit=100"); l.Total != 12 {
 		t.Fatalf("seeded %d books, want 12", l.Total)
 	}
@@ -1024,7 +947,7 @@ func TestSecurityCatalogSeedingLogsOnlyASummaryAtInfo(t *testing.T) {
 // Two or more instances starting at once, as with a scaled-out deployment, all start and end up
 // with one copy of each demo book.
 func TestSecurityCatalogConcurrentSeedingConvergesOnOneDemoCatalog(t *testing.T) {
-	cfg, db := securityCatalogMongoConfig(t)
+	cfg, db := e2eMongoConfig(t)
 	// Migrate first; migrating concurrently is the schema lock's job and tested elsewhere.
 	securityCatalogServe(t, cfg, db)
 
@@ -1074,7 +997,7 @@ func TestSecurityCatalogConcurrentSeedingConvergesOnOneDemoCatalog(t *testing.T)
 // silently. What was already added stays (every book is added on its own), and the next start
 // finishes the job without duplicates.
 func TestSecurityCatalogSeedFailureStopsStartupAndARestartCompletes(t *testing.T) {
-	cfg, db := securityCatalogMongoConfig(t)
+	cfg, db := e2eMongoConfig(t)
 	securityCatalogServe(t, cfg, db) // migrates
 
 	// A foreign book sits on the ID that the third demo book would get.
@@ -1158,7 +1081,7 @@ func TestSecurityCatalogHostileValuesCannotForgeLogLines(t *testing.T) {
 	escaped := strings.NewReplacer("\n", "%0a", "\r", "%0d", " ", "%20").Replace("x\r\n" + forged)
 	line := securityCatalogRune(0x2028)
 
-	env := securityCatalogStart(t, false)
+	env := securityCatalogStart(t)
 	for _, path := range []string{
 		"/api/books/" + escaped,
 		"/api/books?limit=" + escaped,
@@ -1196,41 +1119,40 @@ func TestSecurityCatalogHostileValuesCannotForgeLogLines(t *testing.T) {
 // --- surface -------------------------------------------------------------------------------------
 
 func TestSecurityCatalogOnlyTheDocumentedOperationsExist(t *testing.T) {
-	securityCatalogEach(t, func(t *testing.T, env securityCatalogEnv) {
-		book := securityCatalogCreate(t, env, 1, "Alice")
-		hostile := securityCatalogBook(2, map[string]any{"title": "Hostile"})
-		id := fmt.Sprint(book.ID)
+	env := securityCatalogStart(t)
+	book := securityCatalogCreate(t, env, 1, "Alice")
+	hostile := securityCatalogBook(2, map[string]any{"title": "Hostile"})
+	id := fmt.Sprint(book.ID)
 
-		// No bulk operations, and no way to reach a book by a path trick.
-		for _, tc := range []struct{ method, path string }{
-			{"DELETE", "/api/books"}, {"PUT", "/api/books"}, {"PATCH", "/api/books"}, {"OPTIONS", "/api/books"}, {"TRACE", "/api/books"},
-			{"POST", "/api/books/" + id}, {"PATCH", "/api/books/" + id}, {"OPTIONS", "/api/books/" + id}, {"TRACE", "/api/books/" + id},
-			{"DELETE", "/api/books/"}, {"DELETE", "/api/books/" + id + "/"}, {"DELETE", "/api/books//" + id},
-			{"DELETE", "/api/books/" + id + "/extra"}, {"DELETE", "/api/books/%2e%2e/books/" + id}, {"DELETE", "/api/books/" + id + "%2f"},
-			{"DELETE", "/api/books/" + id + ";x=1"}, {"DELETE", "/api/books/" + id + "%00"}, {"DELETE", "/API/books/" + id},
-			{"DELETE", "/api/books/*"}, {"DELETE", "/api/books/all"}, {"DELETE", "/api/books?id=" + id},
-			{"POST", "/api/books/" + id + "/delete"}, {"GET", "/api/books/" + id + "/versions"}, {"GET", "/api/books/export"},
-			{"GET", "/api/counters"}, {"GET", "/api/admin"}, {"GET", "/metrics"}, {"GET", "/debug/pprof/"}, {"GET", "/debug/vars"},
-		} {
-			ct := ""
-			var body []byte
-			if tc.method == "POST" || tc.method == "PUT" || tc.method == "PATCH" {
-				ct, body = "application/json", hostile
-			}
-			res := securityCatalogSend(t, tc.method, env.url+tc.path, ct, body)
-			if res.status < 400 || res.status >= 500 {
-				t.Errorf("%s %s: %.200s, want a client error", tc.method, tc.path, res)
-				continue
-			}
-			securityCatalogRequireCleanRoute(t, tc.method+" "+tc.path, res)
+	// No bulk operations, and no way to reach a book by a path trick.
+	for _, tc := range []struct{ method, path string }{
+		{"DELETE", "/api/books"}, {"PUT", "/api/books"}, {"PATCH", "/api/books"}, {"OPTIONS", "/api/books"}, {"TRACE", "/api/books"},
+		{"POST", "/api/books/" + id}, {"PATCH", "/api/books/" + id}, {"OPTIONS", "/api/books/" + id}, {"TRACE", "/api/books/" + id},
+		{"DELETE", "/api/books/"}, {"DELETE", "/api/books/" + id + "/"}, {"DELETE", "/api/books//" + id},
+		{"DELETE", "/api/books/" + id + "/extra"}, {"DELETE", "/api/books/%2e%2e/books/" + id}, {"DELETE", "/api/books/" + id + "%2f"},
+		{"DELETE", "/api/books/" + id + ";x=1"}, {"DELETE", "/api/books/" + id + "%00"}, {"DELETE", "/API/books/" + id},
+		{"DELETE", "/api/books/*"}, {"DELETE", "/api/books/all"}, {"DELETE", "/api/books?id=" + id},
+		{"POST", "/api/books/" + id + "/delete"}, {"GET", "/api/books/" + id + "/versions"}, {"GET", "/api/books/export"},
+		{"GET", "/api/counters"}, {"GET", "/api/admin"}, {"GET", "/metrics"}, {"GET", "/debug/pprof/"}, {"GET", "/debug/vars"},
+	} {
+		ct := ""
+		var body []byte
+		if tc.method == "POST" || tc.method == "PUT" || tc.method == "PATCH" {
+			ct, body = "application/json", hostile
 		}
-		if got := securityCatalogGet(t, env, "/api/books/"+id); got.status != http.StatusOK || !strings.Contains(string(got.body), `"Alice"`) {
-			t.Errorf("the book after the probes: %s, want it untouched", got)
+		res := securityCatalogSend(t, tc.method, env.url+tc.path, ct, body)
+		if res.status < 400 || res.status >= 500 {
+			t.Errorf("%s %s: %.200s, want a client error", tc.method, tc.path, res)
+			continue
 		}
-		if l := securityCatalogList(t, env, ""); l.Total != 1 {
-			t.Errorf("total = %d after the probes, want 1", l.Total)
-		}
-	})
+		securityCatalogRequireCleanRoute(t, tc.method+" "+tc.path, res)
+	}
+	if got := securityCatalogGet(t, env, "/api/books/"+id); got.status != http.StatusOK || !strings.Contains(string(got.body), `"Alice"`) {
+		t.Errorf("the book after the probes: %s, want it untouched", got)
+	}
+	if l := securityCatalogList(t, env, ""); l.Total != 1 {
+		t.Errorf("total = %d after the probes, want 1", l.Total)
+	}
 }
 
 // securityCatalogRequireCleanRoute is securityCatalogRequireClean for routing errors, which echo
