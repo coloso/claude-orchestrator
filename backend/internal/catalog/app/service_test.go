@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"orch-test/backend/internal/catalog/adapter/memory"
 	"orch-test/backend/internal/catalog/app"
 	"orch-test/backend/internal/catalog/domain"
 )
@@ -25,7 +24,7 @@ var start = time.Date(2026, 3, 4, 5, 6, 7, 123456789, time.FixedZone("CEST", 2*3
 func newService(t *testing.T) (*app.Service, *clock) {
 	t.Helper()
 	c := &clock{now: start}
-	return app.NewService(memory.NewRepository(), app.WithClock(c.Now)), c
+	return app.NewService(newFakeRepository(), app.WithClock(c.Now)), c
 }
 
 func draft(isbn string) domain.BookDraft {
@@ -272,7 +271,7 @@ type racingRepo struct{ domain.Repository }
 func (racingRepo) Update(context.Context, domain.Book, int64) error { return domain.ErrVersionConflict }
 
 func TestReviseBook_ConcurrentWriter(t *testing.T) {
-	mem := memory.NewRepository()
+	mem := newFakeRepository()
 	svc := app.NewService(racingRepo{mem})
 	added, err := svc.AddBook(ctx, draft(isbnA))
 	if err != nil {
@@ -299,7 +298,7 @@ func TestRemoveBook(t *testing.T) {
 }
 
 func TestNewService_DefaultClock(t *testing.T) {
-	svc := app.NewService(memory.NewRepository())
+	svc := app.NewService(newFakeRepository())
 	before := time.Now().UTC().Truncate(time.Millisecond)
 	added, err := svc.AddBook(ctx, draft(isbnA))
 	if err != nil {
