@@ -4,18 +4,13 @@ package e2e_test
 // Every top-level identifier is prefixed with "seed".
 //
 // Restarting the server means closing the app and calling bootstrap.New again with the same
-// config. Memory storage loses everything on restart, so the restart scenarios need MongoDB and
-// run only when MONGO_TEST_URI is set. Each of them uses its own database, because parallel
-// agents share one server.
+// config. The restart keeps the data because every test runs on its own MongoDB test database.
 
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"log/slog"
 	"net/http/httptest"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -24,7 +19,6 @@ import (
 
 	"orch-test/backend/internal/bootstrap"
 	"orch-test/backend/internal/oas"
-	"orch-test/backend/internal/platform/mongodb"
 )
 
 // seedDemoBook is one row of the demo catalog; zero year and pages mean "not set".
@@ -108,52 +102,12 @@ func seedStart(t *testing.T, cfg bootstrap.Config) *seedServer {
 	return s
 }
 
-// seedMemoryConfig is what ConfigFromEnv yields for STORAGE=memory and the given SEED_DEMO_DATA.
-func seedMemoryConfig(t *testing.T, seedDemoData string) bootstrap.Config {
+// seedConfig is the config of an app on a fresh MongoDB test database with the given SEED_DEMO_DATA.
+func seedConfig(t *testing.T, seedDemoData bool) bootstrap.Config {
 	t.Helper()
-	t.Setenv("STORAGE", "memory")
-	t.Setenv("SEED_DEMO_DATA", seedDemoData)
-	cfg := bootstrap.ConfigFromEnv()
-	cfg.RateLimit = generousLimits()
-	if cfg.Storage != bootstrap.StorageMemory {
-		t.Fatalf("Storage = %q, want memory", cfg.Storage)
-	}
+	cfg, _ := e2eMongoConfig(t)
+	cfg.SeedDemoData = seedDemoData
 	return cfg
-}
-
-// seedMongoConfig returns a config for STORAGE=mongo on a fresh database test_<random hex> that
-// is dropped when the test ends. It skips the test if MONGO_TEST_URI is not set.
-func seedMongoConfig(t *testing.T, seedDemoData bool) bootstrap.Config {
-	t.Helper()
-	uri := os.Getenv("MONGO_TEST_URI")
-	if uri == "" {
-		t.Skip("MONGO_TEST_URI is not set; skipping MongoDB e2e test")
-	}
-	var suffix [8]byte
-	if _, err := rand.Read(suffix[:]); err != nil {
-		t.Fatal(err)
-	}
-	name := "test_" + hex.EncodeToString(suffix[:])
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	client, err := mongodb.Connect(ctx, uri)
-	if err != nil {
-		t.Fatalf("connect to %s: %v", uri, err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = client.Database(name).Drop(ctx)
-		_ = client.Disconnect(ctx)
-	})
-	return bootstrap.Config{
-		Storage:      bootstrap.StorageMongo,
-		MongoURI:     uri,
-		MongoDB:      name,
-		SeedDemoData: seedDemoData,
-		RateLimit:    generousLimits(),
-	}
 }
 
 func seedListAll(t *testing.T, c *oas.Client) *oas.BookList {
@@ -227,26 +181,11 @@ func seedRequireOptInt(t *testing.T, isbn, field string, got oas.OptInt, want in
 // Given an empty catalog and SEED_DEMO_DATA=true, when the server starts,
 // then GET /api/books?limit=100 returns the 12 demo books.
 func TestSeedEmptyCatalogGetsDemoBooks(t *testing.T) {
-	tests := []struct {
-		name  string
-		start func(t *testing.T) *seedServer
-	}{
-		{"memory storage", func(t *testing.T) *seedServer {
-			return seedStart(t, seedMemoryConfig(t, "true"))
-		}},
-		{"mongodb storage", func(t *testing.T) *seedServer {
-			return seedStart(t, seedMongoConfig(t, true))
-		}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := tt.start(t)
-			seedRequireDemoCatalog(t, seedListAll(t, s.client))
+	s := seedStart(t, seedConfig(t, true))
+	seedRequireDemoCatalog(t, seedListAll(t, s.client))
 
-			if got := s.log.String(); !strings.Contains(got, "seeded 12 demo books, skipped 0") {
-				t.Errorf("log lacks the seeding summary; log:\n%s", got)
-			}
-		})
+	if got := s.log.String(); !strings.Contains(got, "seeded 12 demo books, skipped 0") {
+		t.Errorf("log lacks the seeding summary; log:\n%s", got)
 	}
 }
 
@@ -261,7 +200,10 @@ func TestSeedUnsetFlagLeavesCatalogEmpty(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := seedStart(t, seedMemoryConfig(t, tt.value))
+			t.Setenv("SEED_DEMO_DATA", tt.value)
+			cfg, _ := e2eMongoConfig(t)
+			cfg.SeedDemoData = bootstrap.ConfigFromEnv().SeedDemoData
+			s := seedStart(t, cfg)
 			list := seedListAll(t, s.client)
 			if list.Total != 0 || len(list.Items) != 0 {
 				t.Fatalf("total = %d, items = %d, want an empty catalog", list.Total, len(list.Items))
@@ -276,7 +218,7 @@ func TestSeedUnsetFlagLeavesCatalogEmpty(t *testing.T) {
 // Given the demo books are already seeded, when the server restarts with the flag,
 // then there are still 12 books, and the log says `seeded 0 demo books, skipped 12`.
 func TestSeedRestartDoesNotDuplicateDemoBooks(t *testing.T) {
-	cfg := seedMongoConfig(t, true)
+	cfg := seedConfig(t, true)
 
 	first := seedStart(t, cfg)
 	before := seedByISBN(t, seedListAll(t, first.client))
@@ -308,7 +250,7 @@ func TestSeedRestartAddsDeletedDemoBookAndKeepsEditedOne(t *testing.T) {
 		editedTitle = "Refactoring, second edition (annotated)"
 	)
 	ctx := context.Background()
-	cfg := seedMongoConfig(t, true)
+	cfg := seedConfig(t, true)
 
 	first := seedStart(t, cfg)
 	list := seedListAll(t, first.client)

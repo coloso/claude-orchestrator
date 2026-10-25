@@ -8,31 +8,18 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"orch-test/backend/internal/bootstrap"
 	"orch-test/backend/internal/oas"
 )
 
-// crudServer starts a fresh, fully wired server and returns a generated client and its base URL.
+// crudServer starts a fresh, fully wired server on its own MongoDB test database and returns a
+// generated client and its base URL.
 func crudServer(t *testing.T) (*oas.Client, string) {
 	t.Helper()
-	app, err := bootstrap.New(context.Background(), bootstrap.Config{Storage: bootstrap.StorageMemory, RateLimit: generousLimits()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := httptest.NewServer(app.Handler)
-	t.Cleanup(func() {
-		srv.Close()
-		_ = app.Close(context.Background())
-	})
-	client, err := oas.NewClient(srv.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return client, srv.URL
+	env := e2eStart(t)
+	return env.Client, env.URL
 }
 
 // crudISBNWithPrefix returns a 13-digit ISBN made of prefix, 9 digits from n and the check digit.
