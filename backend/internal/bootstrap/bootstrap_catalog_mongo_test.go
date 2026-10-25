@@ -2,11 +2,8 @@ package bootstrap
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -16,17 +13,8 @@ import (
 	"orch-test/backend/internal/platform/mongodb"
 )
 
-func TestNewWithMongoStorageStoresBooksInMongo(t *testing.T) {
-	uri := os.Getenv("MONGO_TEST_URI")
-	if uri == "" {
-		t.Skip("MONGO_TEST_URI is not set; skipping MongoDB integration test")
-	}
-
-	var suffix [8]byte
-	if _, err := rand.Read(suffix[:]); err != nil {
-		t.Fatalf("random database name: %v", err)
-	}
-	dbName := "test_" + hex.EncodeToString(suffix[:])
+func TestNewStoresBooksInMongo(t *testing.T) {
+	uri, dbName := newTestDB(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -35,18 +23,11 @@ func TestNewWithMongoStorageStoresBooksInMongo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := client.Database(dbName).Drop(ctx); err != nil {
-			t.Errorf("drop test database %s: %v", dbName, err)
-		}
-		_ = client.Disconnect(ctx)
-	})
+	t.Cleanup(func() { _ = client.Disconnect(context.Background()) })
 
-	app, err := New(ctx, Config{Storage: StorageMongo, MongoURI: uri, MongoDB: dbName})
+	app, err := New(ctx, Config{MongoURI: uri, MongoDB: dbName})
 	if err != nil {
-		t.Fatalf("New with mongo storage: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := app.Close(context.Background()); err != nil {

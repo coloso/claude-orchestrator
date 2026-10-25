@@ -3,13 +3,11 @@ package bootstrap
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -25,25 +23,82 @@ func TestMigrationSetsAreValid(t *testing.T) {
 	}
 }
 
-func TestNewWithMemoryStorageMakesNoMongoConnection(t *testing.T) {
-	// 127.0.0.1:1 refuses connections. A connection attempt would wait for the
-	// 5 s server-selection timeout, so finishing within 1 s proves none was made.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+func TestNewFailsWhenMongoIsUnreachable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	start := time.Now()
-	app, err := New(ctx, Config{Storage: StorageMemory, MongoURI: "mongodb://127.0.0.1:1", MongoDB: "unused"})
-	elapsed := time.Since(start)
-	if err != nil {
-		t.Fatalf("New with memory storage: %v", err)
+	app, err := New(ctx, Config{MongoURI: "mongodb://alice:s3cret@127.0.0.1:1/?authSource=admin", MongoDB: "orch"})
+	if err == nil {
+		_ = app.Close(context.Background())
+		t.Fatal("New succeeded against an unreachable MongoDB")
 	}
-	t.Cleanup(func() {
-		if err := app.Close(context.Background()); err != nil {
-			t.Errorf("Close: %v", err)
+	if app != nil {
+		t.Fatalf("New returned an app along with the error: %v", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("New did not fail within 10 s: %v", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "mongodb://127.0.0.1:1/") {
+		t.Errorf("error does not name the URI: %v", err)
+	}
+	for _, secret := range []string{"alice", "s3cret"} {
+		if strings.Contains(msg, secret) {
+			t.Errorf("error leaks %q: %v", secret, err)
 		}
-	})
-	if elapsed >= time.Second {
-		t.Fatalf("New with memory storage took %v; it must not connect to MongoDB", elapsed)
+	}
+}
+
+func TestNewRequiresMongoURIAndDatabase(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+	}{
+		{"empty URI", Config{MongoDB: "orch"}},
+		{"empty database", Config{MongoURI: "mongodb://localhost:27017"}},
+		{"both empty", Config{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app, err := New(context.Background(), tt.cfg)
+			if err == nil {
+				_ = app.Close(context.Background())
+				t.Fatal("New succeeded without MongoURI or MongoDB")
+			}
+			if app != nil {
+				t.Fatal("New returned an app along with the error")
+			}
+		})
+	}
+}
+
+func TestRedactMongoURI(t *testing.T) {
+	const unparsable = "(unparsable MongoDB URI)"
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain", "mongodb://localhost:27017", "mongodb://localhost:27017"},
+		{"with path", "mongodb://localhost:27017/orch", "mongodb://localhost:27017/orch"},
+		{"credentials dropped", "mongodb://alice:s3cret@db.example:27017/admin?authSource=admin", "mongodb://db.example:27017/admin"},
+		{"user without password", "mongodb://alice@db.example:27017", "mongodb://db.example:27017"},
+		{"several hosts", "mongodb://u:p@a:1,b:2/db?replicaSet=rs", "mongodb://a:1,b:2/db"},
+		{"srv", "mongodb+srv://u:p@cluster0.example.net/db?retryWrites=true", "mongodb+srv://cluster0.example.net/db"},
+		{"fragment dropped", "mongodb://u:p@h:1/db#frag", "mongodb://h:1/db"},
+		{"bad port", "mongodb://u:s3cret@h:bad/", unparsable},
+		{"control character", "mongodb://u:s3cret@h\x7f:1/", unparsable},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := redactMongoURI(tt.in)
+			if got != tt.want {
+				t.Fatalf("redactMongoURI(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+			if strings.Contains(got, "s3cret") {
+				t.Fatalf("leaks the password: %q", got)
+			}
+		})
 	}
 }
 
@@ -71,6 +126,42 @@ func TestConfigFromEnvSeedDemoData(t *testing.T) {
 	}
 }
 
+func TestConfigFromEnvMongoSettings(t *testing.T) {
+	tests := []struct {
+		name    string
+		uri, db string
+		wantURI string
+		wantDB  string
+	}{
+		{"empty gives the defaults", "", "", "mongodb://localhost:27017", "orch"},
+		{"set values are used as given", "mongodb://db.example:27018", "books", "mongodb://db.example:27018", "books"},
+		{"only the database set", "", "books", "mongodb://localhost:27017", "books"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("MONGO_URI", tt.uri)
+			t.Setenv("MONGO_DB", tt.db)
+			cfg := ConfigFromEnv()
+			if cfg.MongoURI != tt.wantURI || cfg.MongoDB != tt.wantDB {
+				t.Fatalf("MongoURI, MongoDB = %q, %q; want %q, %q", cfg.MongoURI, cfg.MongoDB, tt.wantURI, tt.wantDB)
+			}
+		})
+	}
+}
+
+func TestConfigFromEnvIgnoresStorage(t *testing.T) {
+	t.Setenv("MONGO_URI", "mongodb://db.example:27018")
+	t.Setenv("MONGO_DB", "books")
+	t.Setenv("SEED_DEMO_DATA", "true")
+	t.Setenv("STORAGE", "")
+	want := ConfigFromEnv()
+
+	t.Setenv("STORAGE", "memory")
+	if got := ConfigFromEnv(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("ConfigFromEnv with STORAGE=memory = %+v, want %+v", got, want)
+	}
+}
+
 func ptr[T any](v T) *T { return &v }
 
 // listTotal calls GET /api/books on the app and returns the list's total.
@@ -94,10 +185,13 @@ func listTotal(t *testing.T, app *App) int64 {
 	return list.Total
 }
 
-func newMemoryApp(t *testing.T, cfg Config) *App {
+// newApp builds an app on a fresh test database and closes it when the test ends.
+func newApp(t *testing.T, cfg Config) *App {
 	t.Helper()
-	cfg.Storage = StorageMemory
-	app, err := New(context.Background(), cfg)
+	cfg.MongoURI, cfg.MongoDB = newTestDB(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	app, err := New(ctx, cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -112,20 +206,21 @@ func newMemoryApp(t *testing.T, cfg Config) *App {
 func TestNewWithoutSeedingLeavesTheCatalogEmpty(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	app := newMemoryApp(t, Config{Logger: logger})
+	app := newApp(t, Config{Logger: logger})
 
 	if total := listTotal(t, app); total != 0 {
 		t.Fatalf("total = %d, want 0", total)
 	}
-	if logs.Len() != 0 {
-		t.Fatalf("unexpected logs without SeedDemoData: %s", logs.String())
+	// The migrations log on MongoDB, so only the seeding lines must be absent.
+	if strings.Contains(logs.String(), "seeded") {
+		t.Fatalf("unexpected seeding logs without SeedDemoData: %s", logs.String())
 	}
 }
 
 func TestNewSeedsTheDemoCatalog(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	app := newMemoryApp(t, Config{SeedDemoData: true, Logger: logger})
+	app := newApp(t, Config{SeedDemoData: true, Logger: logger})
 
 	if total := listTotal(t, app); total != 12 {
 		t.Fatalf("total = %d, want 12", total)
@@ -139,38 +234,15 @@ func TestNewSeedsTheDemoCatalog(t *testing.T) {
 	}
 }
 
-func TestNewWithMongoStorageMigrates(t *testing.T) {
-	uri := os.Getenv("MONGO_TEST_URI")
-	if uri == "" {
-		t.Skip("MONGO_TEST_URI is not set; skipping MongoDB integration test")
-	}
-
-	var suffix [8]byte
-	if _, err := rand.Read(suffix[:]); err != nil {
-		t.Fatalf("random database name: %v", err)
-	}
-	dbName := "test_" + hex.EncodeToString(suffix[:])
+func TestNewMigrates(t *testing.T) {
+	uri, dbName := newTestDB(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		client, err := mongodb.Connect(ctx, uri)
-		if err != nil {
-			t.Errorf("connect to drop %s: %v", dbName, err)
-			return
-		}
-		defer func() { _ = client.Disconnect(ctx) }()
-		if err := client.Database(dbName).Drop(ctx); err != nil {
-			t.Errorf("drop test database %s: %v", dbName, err)
-		}
-	})
-
-	app, err := New(ctx, Config{Storage: StorageMongo, MongoURI: uri, MongoDB: dbName})
+	app, err := New(ctx, Config{MongoURI: uri, MongoDB: dbName})
 	if err != nil {
-		t.Fatalf("New with mongo storage: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := app.Close(context.Background()); err != nil {
