@@ -149,7 +149,7 @@ Wrote 8 task(s) to backlog/plans/S02-shopping-list.json:
   S02-08   [docs]      Shopping list documentation  (after S02-04, S02-05)
 ```
 
-Open the JSON and check it. For example: is the "merge duplicate products" rule in S02-02's prompt? Does S02-06 quote every acceptance criterion? Is S02-02's scope limited to `internal/shopping/{domain,app,adapter/memory}`?
+Open the JSON and check it. For example: is the "merge duplicate products" rule in S02-02's prompt? Does S02-06 quote every acceptance criterion? Is S02-02's scope limited to `internal/shopping/{domain,app}`?
 
 **3. Queue it** (and commit the story and plan to your branch whenever you like):
 
@@ -229,7 +229,7 @@ git push -u origin story/S02-shopping-list
   - `.orch/events.jsonl` is the orchestrator's event log.
 - **Stuck queue:** `run` stops when nothing runnable is left. If tasks are still pending, a dependency failed; check `make status`.
 - **Ctrl-C** stops the workers. Interrupted tasks go back to pending on the next `run`.
-- **MongoDB adapter tests:** agents and gates inherit your environment. To have them run these tests, start the database and export `MONGO_TEST_URI` before `make run`:
+- **MongoDB tests:** tests need MongoDB, and `backend/check.sh` fails without `MONGO_TEST_URI`. Agents and gates inherit your environment, so start the database and export it before `make run`:
 
   ```bash
   make mongo && export MONGO_TEST_URI=mongodb://localhost:27017
@@ -260,7 +260,7 @@ orch-test/
 │   ├── internal/<context>/ bounded context = hexagon       │
 │   ├── internal/oas/      ogen-generated server + client   │
 │   ├── internal/handler/  embeds the contexts' adapters    │ the product
-│   ├── internal/bootstrap/ composition root, storage choice│ agents work on
+│   ├── internal/bootstrap/ composition root, MongoDB wiring│ agents work on
 │   ├── internal/archtest/ dependency rules as a Go test    │
 │   ├── internal/platform/mongodb/ MongoDB connection       │
 │   ├── e2e/               tests via generated oas.Client   │
@@ -380,9 +380,8 @@ Every feature is a **bounded context** in `backend/internal/<context>/`, built a
 | `domain/` | aggregates, value objects, domain errors, repository interface | stdlib only |
 | `app/` | `UseCases` interface (inbound port) + `Service` | its `domain` |
 | `adapter/httpapi/` | implements the context's `oas.Handler` methods; maps oas ↔ domain and domain errors → HTTP | its `app`, `domain`, `oas` |
-| `adapter/memory/` | implements `domain.Repository` in memory (tests, default) | its `domain` |
 | `adapter/mongodb/` | implements `domain.Repository` on MongoDB 8 | its `domain`, `platform/mongodb`, the driver |
-| `adapter/repotest/` | repository contract suite, run against every repository adapter | its `domain` |
+| `adapter/repotest/` | repository contract suite, run against the MongoDB repository | its `domain` |
 
 - **Boundaries are tests:** `internal/archtest` fails on any import that breaks the rules, including one bounded context importing another.
 - **Wiring:** only `internal/bootstrap` (the composition root) and `internal/handler` (which embeds the adapters) may reach into a context.
@@ -396,15 +395,14 @@ make up          # docker compose: MongoDB 8 + backend on http://localhost:8000
 make logs
 make down        # keeps data in the mongo-data volume; `docker compose down -v` drops it
 
-make backend                              # locally, in-memory storage
-make mongo && STORAGE=mongo make backend  # locally against the compose MongoDB
-make test-mongo                           # all checks, including the MongoDB adapter tests
+make mongo && make backend   # locally against the compose MongoDB
+make check                   # all checks; needs MongoDB (make mongo)
 ```
 
 Configuration (environment):
 - `PORT` (8000): the port the server listens on.
 - `LISTEN_HOST` (`127.0.0.1`): the IP address the server listens on. The image sets `0.0.0.0` so the published port works; docker-compose.yml publishes it on `127.0.0.1` only.
-- `STORAGE` (`memory`, the default, or `mongo`), `MONGO_URI`, `MONGO_DB`.
+- `MONGO_URI` (`mongodb://localhost:27017`), `MONGO_DB` (`orch`). The server always connects to MongoDB and migrates before serving.
 - `SEED_DEMO_DATA`: parsed with `strconv.ParseBool`; unset or invalid means off. When on, the 12 demo books are added at startup through the catalog use cases, after the migrations. Books whose ISBN is already present are skipped, so restarts don't duplicate them; deleted demo books come back, and edited ones are kept. The log line is `seeded N demo books, skipped M`.
 
 docker-compose.yml deliberately leaves `SEED_DEMO_DATA` unset, so demo data stays off there; to turn it on for one run, use `SEED_DEMO_DATA=true make backend`.

@@ -20,7 +20,6 @@ services:
     build: ./backend
     restart: unless-stopped
     environment:
-      STORAGE: mongo
       MONGO_URI: mongodb://mongo:27017
       MONGO_DB: orch
       # SEED_DEMO_DATA is deliberately not set: demo data is opt-in and stays off here.
