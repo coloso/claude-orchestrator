@@ -1,31 +1,23 @@
 package e2e_test
 
 import (
-	"context"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"orch-test/backend/internal/bootstrap"
+	"orch-test/backend/internal/middleware"
 )
 
 // TestRateLimitAppliesToLoopbackAndSparesHealth runs the app with the default limits
 // (a zero bootstrap.Config.RateLimit). The client connects over loopback and is limited.
 func TestRateLimitAppliesToLoopbackAndSparesHealth(t *testing.T) {
-	app, err := bootstrap.New(context.Background(), bootstrap.Config{Storage: bootstrap.StorageMemory})
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := httptest.NewServer(app.Handler)
-	t.Cleanup(func() {
-		srv.Close()
-		_ = app.Close(context.Background())
-	})
+	cfg, db := e2eMongoConfig(t)
+	cfg.RateLimit = middleware.RateLimitConfig{}
+	env := e2eServe(t, cfg, db)
 
 	do := func(method, path, body string) *http.Response {
 		t.Helper()
-		req, err := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+		req, err := http.NewRequest(method, env.URL+path, strings.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
 		}
