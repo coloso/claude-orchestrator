@@ -54,7 +54,7 @@ func run(addr string) error {
 
 	errc := make(chan error, 1)
 	go func() {
-		slog.Info("listening", "addr", addr, "storage", cfg.Storage)
+		slog.Info("listening", "addr", addr, "database", cfg.MongoDB)
 		errc <- srv.ListenAndServe()
 	}()
 

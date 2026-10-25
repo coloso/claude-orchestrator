@@ -41,11 +41,10 @@ func e2eMongoURI(t *testing.T) string {
 	return uri
 }
 
-// e2eConfig is the bootstrap configuration of every e2e app: MongoDB storage in database
-// dbName and generous rate limits. It is the only place in this package that names the
-// storage. S03-08 removes the Storage field once bootstrap has no storage setting.
+// e2eConfig is the bootstrap configuration of every e2e app: database dbName on the MongoDB
+// server at uri and generous rate limits.
 func e2eConfig(uri, dbName string) bootstrap.Config {
-	return bootstrap.Config{Storage: bootstrap.StorageMongo, MongoURI: uri, MongoDB: dbName, RateLimit: generousLimits()}
+	return bootstrap.Config{MongoURI: uri, MongoDB: dbName, RateLimit: generousLimits()}
 }
 
 // e2eSharedClient connects once, on first use, and is shared by all tests. No test

@@ -8,17 +8,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"reflect"
 	"strconv"
 
-	"go.mongodb.org/mongo-driver/v2/mongo"
-
 	cataloghttp "orch-test/backend/internal/catalog/adapter/httpapi"
-	catalogmemory "orch-test/backend/internal/catalog/adapter/memory"
 	catalogmongo "orch-test/backend/internal/catalog/adapter/mongodb"
 	catalogapp "orch-test/backend/internal/catalog/app"
-	catalogdomain "orch-test/backend/internal/catalog/domain"
 	"orch-test/backend/internal/handler"
 	"orch-test/backend/internal/middleware"
 	"orch-test/backend/internal/platform/mongodb"
@@ -32,17 +29,9 @@ func migrationSets() [][]mongodb.Migration {
 	}
 }
 
-// Storage selects the driven adapters for all repositories.
-type Storage string
-
-const (
-	StorageMemory Storage = "memory" // default; used by tests
-	StorageMongo  Storage = "mongo"
-)
-
 // Config configures the application.
 type Config struct {
-	Storage  Storage
+	// MongoURI and MongoDB locate the database; both are required.
 	MongoURI string
 	MongoDB  string
 
@@ -55,18 +44,15 @@ type Config struct {
 	Logger *slog.Logger
 }
 
-// ConfigFromEnv reads STORAGE, MONGO_URI, MONGO_DB and SEED_DEMO_DATA.
-// SEED_DEMO_DATA is parsed with strconv.ParseBool; unset or unparsable means false.
+// ConfigFromEnv reads MONGO_URI (default mongodb://localhost:27017), MONGO_DB (default orch)
+// and SEED_DEMO_DATA. SEED_DEMO_DATA is parsed with strconv.ParseBool; unset or unparsable
+// means false. There is no storage setting: a STORAGE variable is ignored.
 func ConfigFromEnv() Config {
 	cfg := Config{
-		Storage:  Storage(os.Getenv("STORAGE")),
 		MongoURI: os.Getenv("MONGO_URI"),
 		MongoDB:  os.Getenv("MONGO_DB"),
 	}
 	cfg.SeedDemoData, _ = strconv.ParseBool(os.Getenv("SEED_DEMO_DATA"))
-	if cfg.Storage == "" {
-		cfg.Storage = StorageMemory
-	}
 	if cfg.MongoURI == "" {
 		cfg.MongoURI = "mongodb://localhost:27017"
 	}
@@ -91,18 +77,29 @@ func (a *App) Close(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// redactMongoURI returns raw without credentials, query and fragment, so it is safe to log
+// and to put in errors: "mongodb://alice:s3cret@db.example:27017/admin?authSource=admin"
+// becomes "mongodb://db.example:27017/admin".
+func redactMongoURI(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "(unparsable MongoDB URI)"
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String()
+}
+
 // New builds the application. cmd/server and the e2e tests both use it.
-// With STORAGE=mongo it migrates the schema before returning, so cmd/server
-// only serves HTTP after the migrations finished. STORAGE=memory migrates nothing.
+// It always connects to MongoDB and migrates the schema before returning, so cmd/server
+// only serves HTTP after the migrations finished. If MongoDB can't be reached, the error
+// names the URI without its credentials.
 //
-// Wiring a bounded context picks its repository from the configured storage:
+// Wiring a bounded context builds its repository on db:
 //
-//	var todoRepo tododomain.Repository = todomemory.NewRepository()
-//	if db != nil {
-//		todoRepo = todomongodb.NewRepository(db)
-//	}
-//	h.TodoHandler = todohttp.NewTodoHandler(todoapp.NewService(todoRepo))
+//	h.TodoHandler = todohttp.NewTodoHandler(todoapp.NewService(todomongodb.NewRepository(db)))
 func New(ctx context.Context, cfg Config) (*App, error) {
+	if cfg.MongoURI == "" || cfg.MongoDB == "" {
+		return nil, errors.New("bootstrap: MongoURI and MongoDB are required")
+	}
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -110,30 +107,19 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	app := &App{}
 	h := &handler.Handler{}
 
-	var db *mongo.Database // nil unless Storage is mongo
-	switch cfg.Storage {
-	case StorageMemory, "":
-	case StorageMongo:
-		client, err := mongodb.Connect(ctx, cfg.MongoURI)
-		if err != nil {
-			return nil, err
-		}
-		app.closers = append(app.closers, client.Disconnect)
-		db = client.Database(cfg.MongoDB)
-		if err := mongodb.Migrate(ctx, db, migrationSets(), mongodb.MigrateOptions{Logger: logger}); err != nil {
-			_ = app.Close(ctx)
-			return nil, fmt.Errorf("migrate database schema: %w", err)
-		}
-		h.Ping = func(ctx context.Context) error { return mongodb.Ping(ctx, client) }
-	default:
-		return nil, fmt.Errorf("unknown STORAGE %q (want memory or mongo)", cfg.Storage)
+	client, err := mongodb.Connect(ctx, cfg.MongoURI)
+	if err != nil {
+		return nil, fmt.Errorf("connect to MongoDB at %s: %w", redactMongoURI(cfg.MongoURI), err)
 	}
+	app.closers = append(app.closers, client.Disconnect)
+	db := client.Database(cfg.MongoDB)
+	if err := mongodb.Migrate(ctx, db, migrationSets(), mongodb.MigrateOptions{Logger: logger}); err != nil {
+		_ = app.Close(ctx)
+		return nil, fmt.Errorf("migrate database schema: %w", err)
+	}
+	h.Ping = func(ctx context.Context) error { return mongodb.Ping(ctx, client) }
 
-	var catalogRepo catalogdomain.Repository = catalogmemory.NewRepository()
-	if db != nil {
-		catalogRepo = catalogmongo.NewRepository(db)
-	}
-	catalogSvc := catalogapp.NewService(catalogRepo)
+	catalogSvc := catalogapp.NewService(catalogmongo.NewRepository(db))
 	h.CatalogHandler = cataloghttp.NewCatalogHandler(catalogSvc)
 
 	if cfg.SeedDemoData {
