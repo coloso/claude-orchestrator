@@ -18,7 +18,7 @@ import (
 var now = time.Date(2026, 1, 2, 3, 4, 5, 678_000_000, time.UTC).Truncate(time.Millisecond)
 
 // Run runs the contract suite. newRepo returns a fresh, empty repository for each subtest;
-// it may call t.Skip (MongoDB without MONGO_TEST_URI) and register cleanups.
+// it may register cleanups.
 func Run(t *testing.T, newRepo func(t *testing.T) domain.Repository) {
 	cases := []struct {
 		name string

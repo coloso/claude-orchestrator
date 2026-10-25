@@ -12,14 +12,14 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-// newTestDB returns a fresh database on the server at MONGO_TEST_URI, or skips the test if it
+// newTestDB returns a fresh database on the server at MONGO_TEST_URI, or fails the test if it
 // isn't set. Each test gets its own database (test_<random hex>), because parallel agents share
 // one server; it is dropped, and the client disconnected, when the test ends.
 func newTestDB(t *testing.T) *mongo.Database {
 	t.Helper()
 	uri := os.Getenv("MONGO_TEST_URI")
 	if uri == "" {
-		t.Skip("MONGO_TEST_URI is not set; skipping MongoDB integration test")
+		t.Fatal("MONGO_TEST_URI is not set: run `make mongo`, then `export MONGO_TEST_URI=mongodb://localhost:27017`")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
