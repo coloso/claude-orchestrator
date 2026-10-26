@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1024,13 +1025,22 @@ func (p *secFreezableProxy) serve(client net.Conn) {
 	pipe(client, upstream)
 }
 
-func TestSecurityBooksMongoOperationsHaveATimeout(t *testing.T) {
-	uri := e2eMongoURI(t)
+// secMongoHost returns the host (and port) of a MongoDB URI. Its errors never quote the URI,
+// because url.Parse's own error does, and the URI may carry credentials (SEC-S03-3).
+func secMongoHost(uri string) (string, error) {
 	parsed, err := url.Parse(uri)
 	if err != nil || parsed.Host == "" {
-		t.Fatalf("cannot find the host of MONGO_TEST_URI: %v", err)
+		return "", errors.New("cannot find the host of MONGO_TEST_URI (the value is not shown: it may carry credentials)")
 	}
-	proxy := secNewFreezableProxy(t, parsed.Host)
+	return parsed.Host, nil
+}
+
+func TestSecurityBooksMongoOperationsHaveATimeout(t *testing.T) {
+	host, err := secMongoHost(e2eMongoURI(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := secNewFreezableProxy(t, host)
 
 	cfg, db := e2eMongoConfig(t)
 	cfg.MongoURI = "mongodb://" + proxy.ln.Addr().String() + "/?directConnection=true"
