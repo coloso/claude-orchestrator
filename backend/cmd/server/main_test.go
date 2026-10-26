@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -134,6 +135,33 @@ func TestCheckHealthFailsOnNonOKStatus(t *testing.T) {
 	}
 	if got := checkHealth(port); got != 1 {
 		t.Errorf("checkHealth(%d) = %d, want 1 for a 503 response", port, got)
+	}
+}
+
+func TestRunFailsWhenMongoIsUnreachable(t *testing.T) {
+	t.Setenv("MONGO_URI", "mongodb://alice:s3cret@127.0.0.1:1/")
+	t.Setenv("MONGO_DB", "orch")
+	t.Setenv("STORAGE", "memory")
+
+	errc := make(chan error, 1)
+	go func() { errc <- run("127.0.0.1:0") }()
+
+	select {
+	case err := <-errc:
+		if err == nil {
+			t.Fatal("run returned nil; the server must not start without MongoDB")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "127.0.0.1:1") {
+			t.Errorf("error does not name the URI: %v", err)
+		}
+		for _, secret := range []string{"alice", "s3cret"} {
+			if strings.Contains(msg, secret) {
+				t.Errorf("error leaks %q: %v", secret, err)
+			}
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not return within 10 s")
 	}
 }
 

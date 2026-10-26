@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"orch-test/backend/internal/catalog/adapter/memory"
 	"orch-test/backend/internal/catalog/app"
 	"orch-test/backend/internal/catalog/domain"
 )
@@ -144,7 +143,7 @@ func (r addErrRepo) Add(context.Context, domain.Book) (domain.Book, error) {
 }
 
 func TestSeedDemo_AddDuplicateIsSkipped(t *testing.T) {
-	svc := app.NewService(addErrRepo{memory.NewRepository(), domain.ErrDuplicateISBN})
+	svc := app.NewService(addErrRepo{newFakeRepository(), domain.ErrDuplicateISBN})
 	rep, err := svc.SeedDemo(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +155,7 @@ func TestSeedDemo_AddDuplicateIsSkipped(t *testing.T) {
 
 func TestSeedDemo_AddErrorStopsSeeding(t *testing.T) {
 	boom := errors.New("boom")
-	svc := app.NewService(addErrRepo{memory.NewRepository(), boom})
+	svc := app.NewService(addErrRepo{newFakeRepository(), boom})
 	rep, err := svc.SeedDemo(ctx)
 	first := demoISBNs(t)[0]
 	if !errors.Is(err, boom) || !strings.Contains(err.Error(), first.String()) {
@@ -179,7 +178,7 @@ func (r findErrRepo) FindByISBN(context.Context, domain.ISBN) (domain.Book, erro
 
 func TestSeedDemo_FindErrorIsReturned(t *testing.T) {
 	boom := errors.New("db down")
-	svc := app.NewService(findErrRepo{memory.NewRepository(), boom})
+	svc := app.NewService(findErrRepo{newFakeRepository(), boom})
 	_, err := svc.SeedDemo(ctx)
 	if !errors.Is(err, boom) || !strings.Contains(err.Error(), demoISBNs(t)[0].String()) {
 		t.Fatalf("err = %v", err)

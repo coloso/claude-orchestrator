@@ -30,7 +30,6 @@ How the MongoDB schema is created and changed. Code: `backend/internal/platform/
   the ledger.
 - **Serve after migrating.** `bootstrap.New` migrates before `cmd/server` starts listening, so HTTP
   is only served once migrations are done.
-- **Memory storage.** `STORAGE=memory` migrates nothing and doesn't connect to MongoDB.
 - **Each context is independent.** A context may appear in only one set.
 
 ## Adding a migration
@@ -119,7 +118,7 @@ Logs use the default `slog` logger (stderr).
 
 ```
 level=INFO msg="schema migration applied" id=catalog/0001 description="create books collection with validator and indexes" durationMs=42
-level=INFO msg=listening addr=:8000 storage=mongo
+level=INFO msg=listening addr=:8000 database=orch
 ```
 
 - One `schema migration applied` line per migration that ran. If nothing is pending, there are no
@@ -149,10 +148,11 @@ instance is still running.
 
 ### Running the MongoDB tests
 
-MongoDB adapter tests are skipped unless `MONGO_TEST_URI` is set.
+Tests need MongoDB, and `backend/check.sh` fails without `MONGO_TEST_URI`.
 
 ```sh
-make test-mongo    # starts MongoDB (docker compose), then runs backend/check.sh with MONGO_TEST_URI set
+make mongo         # starts MongoDB (docker compose)
+make check         # runs backend/check.sh with MONGO_TEST_URI (default mongodb://localhost:27017)
 ```
 
 Each test creates its own database, `test_<random hex>`, and drops it when the test ends. Parallel

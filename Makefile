@@ -3,7 +3,7 @@ PLAN ?= backlog/plans/todo-tasks.json
 
 .DEFAULT_GOAL := help
 
-.PHONY: help plan load dry-run dashboard status proposals review approve reject retry run reset backend generate check up down logs mongo test-mongo
+.PHONY: help plan load dry-run dashboard status proposals review approve reject retry run reset backend generate check up down logs mongo
 
 # @ 🚀 Help & Info
 help: ## Show this beautifully categorized help menu
@@ -56,7 +56,7 @@ reset:            ## 🧹 Remove queue state, worktrees and agent/* branches
 	$(ORCH) reset
 
 # @ 🖥️  Backend & Services
-backend:          ## 🟢 Run API on :8000 with in-memory storage (STORAGE=mongo for DB)
+backend:          ## 🟢 Run API on :8000 against MongoDB (make mongo first; MONGO_URI / MONGO_DB override)
 	cd backend && go run ./cmd/server
 
 up:               ## 🐳 Build and start MongoDB + backend (http://localhost:8000)
@@ -75,8 +75,5 @@ mongo:            ## 🍃 Start only MongoDB on localhost:27017
 generate:         ## ⚡ Regenerate internal/oas from api/openapi.yaml with ogen
 	cd backend && go generate ./...
 
-check:            ## 🔍 Run what quality gate runs: generate drift, gofmt, vet, test
-	backend/check.sh
-
-test-mongo:       ## 🧪 Run backend checks including MongoDB adapter tests
-	MONGO_TEST_URI=mongodb://localhost:27017 backend/check.sh
+check:            ## 🔍 Run what quality gate runs: generate drift, gofmt, vet, test (needs MongoDB: make mongo)
+	MONGO_TEST_URI=$${MONGO_TEST_URI:-mongodb://localhost:27017} backend/check.sh

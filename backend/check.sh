@@ -1,8 +1,16 @@
 #!/bin/sh
 # Backend checks: generate drift, gofmt, vet, tests (incl. archtest), coverage, gosec, govulncheck.
+# The checks need MongoDB at MONGO_TEST_URI (start one with `make mongo`); MongoDB tests fail without it.
 # Agents run this before finishing; the orchestrator's quality gate runs it too.
 set -e
 cd "$(dirname "$0")"
+
+if [ -z "${MONGO_TEST_URI:-}" ]; then
+  echo "MONGO_TEST_URI is not set. The backend tests run against MongoDB:"
+  echo "  make mongo"
+  echo "  export MONGO_TEST_URI=mongodb://localhost:27017"
+  exit 1
+fi
 
 # Minimum statement coverage for the inner layers (internal/<context>/domain and app).
 MIN_COVERAGE=${MIN_COVERAGE:-80}

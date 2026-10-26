@@ -1,24 +1,20 @@
 package e2e_test
 
-// End-to-end tests of the schema migration platform: bootstrap.New with STORAGE=mongo, and
+// End-to-end tests of the schema migration platform: bootstrap.New, and
 // mongodb.Migrate with synthetic migration sets for the scenarios the real code can't produce yet
 // (catalog/0002, a failing migration). Every top-level identifier is prefixed with "migration".
 //
-// MongoDB tests run only when MONGO_TEST_URI is set. Each test gets its own database, because
-// parallel agents share one server.
+// Each test gets its own database, because parallel agents share one server.
 
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http/httptest"
-	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -46,41 +42,17 @@ func migrationCtx(t *testing.T) context.Context {
 	return ctx
 }
 
-// migrationTestDB returns a fresh database test_<random hex> and the server URI, or skips the test
-// if MONGO_TEST_URI is not set. The database is dropped when the test ends.
+// migrationTestDB returns a fresh database test_<random hex> and the server URI. The database is
+// dropped when the test ends.
 func migrationTestDB(t *testing.T) (db *mongo.Database, uri string) {
 	t.Helper()
-	uri = os.Getenv("MONGO_TEST_URI")
-	if uri == "" {
-		t.Skip("MONGO_TEST_URI is not set; skipping MongoDB e2e test")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	client, err := mongodb.Connect(ctx, uri)
-	if err != nil {
-		t.Fatalf("connect to %s: %v", uri, err)
-	}
-	var suffix [8]byte
-	if _, err := rand.Read(suffix[:]); err != nil {
-		t.Fatalf("random database name: %v", err)
-	}
-	db = client.Database("test_" + hex.EncodeToString(suffix[:]))
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := db.Drop(ctx); err != nil {
-			t.Errorf("drop test database %s: %v", db.Name(), err)
-		}
-		if err := client.Disconnect(ctx); err != nil {
-			t.Errorf("disconnect: %v", err)
-		}
-	})
-	return db, uri
+	_, db = e2eTestDB(t)
+	return db, e2eMongoURI(t)
 }
 
-// migrationNewApp builds the application on the given database with STORAGE=mongo.
+// migrationNewApp builds the application on the given database.
 func migrationNewApp(ctx context.Context, uri, dbName string) (*bootstrap.App, error) {
-	return bootstrap.New(ctx, bootstrap.Config{Storage: bootstrap.StorageMongo, MongoURI: uri, MongoDB: dbName, RateLimit: generousLimits()})
+	return bootstrap.New(ctx, e2eConfig(uri, dbName))
 }
 
 // migrationServe serves app with httptest and returns a generated client. The server and the app
@@ -742,28 +714,7 @@ func TestAChangedValidatorIsAppliedToAnExistingCollection(t *testing.T) {
 	}
 }
 
-// --- 10. STORAGE=memory makes no MongoDB connection ---
-
-func TestMemoryStorageRunsNoMigrationAndMakesNoMongoConnection(t *testing.T) {
-	t.Parallel()
-	// 127.0.0.1:1 refuses connections; a connection attempt would wait for the server selection timeout.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	begin := time.Now()
-	app, err := bootstrap.New(ctx, bootstrap.Config{Storage: bootstrap.StorageMemory, MongoURI: "mongodb://127.0.0.1:1"})
-	elapsed := time.Since(begin)
-	if err != nil {
-		t.Fatalf("bootstrap.New with memory storage: %v", err)
-	}
-	if elapsed >= time.Second {
-		t.Errorf("startup took %v, want well under 1 s", elapsed)
-	}
-
-	migrationRequireHealthy(t, migrationServe(t, app))
-}
-
-// --- 11. logging, and health keeps working ---
+// --- 10. logging, and health keeps working ---
 
 // migrationSyncBuffer is a bytes.Buffer that is safe for concurrent writes.
 type migrationSyncBuffer struct {
