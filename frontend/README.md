@@ -1,54 +1,23 @@
-# .
+# Frontend
 
-This template should help get you started developing with Vue 3 in Vite.
+The web UI for the book catalog: a Vue 3 + TypeScript app that browses, adds, revises and removes books through the `catalog` API.
 
-## Recommended IDE Setup
+## Commands
 
-[VS Code](https://code.visualstudio.com/) + [Vue (Official)](https://marketplace.visualstudio.com/items?itemName=Vue.volar) (and disable Vetur).
+Run these in `frontend/`, after `npm install` (Node `^22.18.0 || >=24.12.0`):
 
-## Recommended Browser Setup
+| Command | What it does |
+| --- | --- |
+| `npm install` | Installs the dependencies. |
+| `npm run dev` | Starts Vite on http://localhost:5173, proxying `/api` to the backend on :8000. Regenerates the API types first. From the repo root: `make frontend`. |
+| `npm run generate` | Generates `src/api/schema.d.ts` from `../backend/api/openapi.yaml`. |
+| `npm run typecheck` | Regenerates the types, then runs `vue-tsc`. |
+| `npm test` | Runs the Vitest suite once. |
+| `npm run build` | Type-checks, then builds to `dist/`. |
+| `npm run lint` | Runs oxlint and ESLint with `--fix`, so it edits files. |
 
-- Chromium-based browsers (Chrome, Edge, Brave, etc.):
-  - [Vue.js devtools](https://chromewebstore.google.com/detail/vuejs-devtools/nhdogjmejiglipccpnnnanhbledajbpd)
-  - [Turn on Custom Object Formatter in Chrome DevTools](http://bit.ly/object-formatters)
-- Firefox:
-  - [Vue.js devtools](https://addons.mozilla.org/en-US/firefox/addon/vue-js-devtools/)
-  - [Turn on Custom Object Formatter in Firefox DevTools](https://fxdx.dev/firefox-devtools-custom-object-formatters/)
+The frontend gate is `npm run typecheck && npm test`.
 
-## Type Support for `.vue` Imports in TS
+## More
 
-TypeScript cannot handle type information for `.vue` imports by default, so we replace the `tsc` CLI with `vue-tsc` for type checking. In editors, we need [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar) to make the TypeScript language service aware of `.vue` types.
-
-## Customize configuration
-
-See [Vite Configuration Reference](https://vite.dev/config/).
-
-## Project Setup
-
-```sh
-npm install
-```
-
-### Compile and Hot-Reload for Development
-
-```sh
-npm run dev
-```
-
-### Type-Check, Compile and Minify for Production
-
-```sh
-npm run build
-```
-
-### Run Unit Tests with [Vitest](https://vitest.dev/)
-
-```sh
-npm run test:unit
-```
-
-### Lint with [ESLint](https://eslint.org/)
-
-```sh
-npm run lint
-```
+See [../docs/frontend.md](../docs/frontend.md) for the screens and routes, how the UI maps to the API, error handling, the tests and the source layout.
