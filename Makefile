@@ -3,7 +3,7 @@ PLAN ?= backlog/plans/todo-tasks.json
 
 .DEFAULT_GOAL := help
 
-.PHONY: help plan load dry-run dashboard status proposals review approve reject retry run reset backend generate check up down logs mongo
+.PHONY: help plan load dry-run dashboard status proposals review approve reject retry run reset backend frontend generate check up down logs mongo
 
 # @ 🚀 Help & Info
 help: ## Show this beautifully categorized help menu
@@ -58,6 +58,9 @@ reset:            ## 🧹 Remove queue state, worktrees and agent/* branches
 # @ 🖥️  Backend & Services
 backend:          ## 🟢 Run API on :8000 against MongoDB (make mongo first; MONGO_URI / MONGO_DB override)
 	cd backend && go run ./cmd/server
+
+frontend:         ## 🖼️  Run the Vue app on http://localhost:5173 (proxies /api to make backend)
+	cd frontend && npm run dev
 
 up:               ## 🐳 Build and start MongoDB + backend (http://localhost:8000)
 	docker compose up -d --build --wait
