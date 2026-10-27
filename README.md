@@ -21,16 +21,24 @@ Requires `python3`, `go` (1.27+), `git`, `claude` (Claude Code, logged in) and D
 ```bash
 git add -A && git commit -m "Initial scaffold"   # story branches start from your last commit
 
-# Rehearse without calling Claude (no cost): fake agents, real queue, worktrees and merges
-make dry-run                                      # merges placeholders into story/todo-tasks
-git branch -D story/todo-tasks && make reset      # clean up the rehearsal
+# Tests and gates need MongoDB
+make mongo && export MONGO_TEST_URI=mongodb://localhost:27017
 
 # Keep the dashboard open in a second terminal: it shows progress and tells you the next step
 make dashboard   # http://localhost:8765/orchestration/dashboard/
 
-# The real thing: the prepared todo plan, 10 tasks
-make demo
+# Write a story (copy backlog/stories/TEMPLATE.md), let the planner turn it into a plan, review it
+make plan STORY=backlog/stories/s-04-my-feature.md   # writes backlog/plans/s-04-my-feature.json
+
+# Rehearse without calling Claude (no cost): fake agents, real queue, worktrees and merges
+make dry-run PLAN=backlog/plans/s-04-my-feature.json   # merges placeholders into story/s-04-my-feature
+git branch -D story/s-04-my-feature && make reset      # clean up the rehearsal
+
+# The real thing
+make load PLAN=backlog/plans/s-04-my-feature.json && make run
 ```
+
+`backlog/` holds the stories and plans built so far (`s-01-db-schema`, `s-02-crud-on-books-api`, `s-03-remove-in-memory`); they are good examples to copy from.
 
 ## Using the orchestrator
 
@@ -50,7 +58,7 @@ The orchestrator is a Python CLI (`orchestration/orchestrator/orchestrator.py`, 
 | `make reject IDS="S02-07.2"` | `reject <ids>` | Discards proposals |
 | `make retry` / `make retry IDS="S02-03"` | `retry [ids] --run` | Puts failed tasks back in the queue with fresh attempts and starts a run for their plans. Without `IDS`: every failed task of the stories started from your current branch. `NORUN=1` only requeues |
 | `make reset` | `reset` | Deletes runtime state (`.orch/`, `.worktrees/`, `agent/*` branches). Keeps stories, plans and `story/*` branches |
-| `make demo` / `make dry-run` | `load` + `run [--fake]` | Prepared todo plan, for real or rehearsed |
+| `make dry-run PLAN=backlog/plans/S02-x.json` | `load <plan>` + `run --fake` | Rehearses a plan without calling Claude (see [Dry runs](#dry-runs)) |
 
 ### Workflow: story → plan → spec → implementation
 
@@ -240,8 +248,8 @@ git push -u origin story/S02-shopping-list
 `--fake` workers don't call Claude. They write a placeholder file inside each task's scope, skip the gate commands, and security tasks propose a fake follow-up. This exercises the queue, dependencies, `--only`, proposals, merges and story finalization at no cost (the final checks are skipped). The placeholders end up on `story/<plan>`, so delete that branch afterwards:
 
 ```bash
-make dry-run                                   # or: make load PLAN=… && python3 orchestration/orchestrator/orchestrator.py run --fake
-git branch -D story/todo-tasks && make reset
+make dry-run PLAN=backlog/plans/<plan>.json    # or: make load PLAN=… && python3 orchestration/orchestrator/orchestrator.py run --fake
+git branch -D story/<plan> && make reset
 ```
 
 ## How it works
@@ -253,8 +261,8 @@ orch-test/
 ├── CLAUDE.md          rules every agent reads
 ├── docker-compose.yml MongoDB 8 + backend
 ├── backlog/           your input; agents never touch it
-│   ├── stories/          one story per feature (TEMPLATE.md, S01-todo.md, …)
-│   └── plans/            plan files: todo-tasks.json (demo), S<NN>-*.json from `make plan`
+│   ├── stories/          one story per feature (TEMPLATE.md, s-01-db-schema.md, …)
+│   └── plans/            plan files from `make plan`, named after their story (s-01-db-schema.json, …)
 ├── backend/           Go 1.27 module                       ┐
 │   ├── api/openapi.yaml   API contract (source of truth)   │
 │   ├── internal/<context>/ bounded context = hexagon       │
