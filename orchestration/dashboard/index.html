@@ -49,6 +49,7 @@
   /* next steps */
   .hints { display: grid; gap: 8px; }
   .hint { border-left: 4px solid var(--c); }
+  .hint.shipped { opacity: .6; }
   .hint .cmd { display: flex; gap: 8px; align-items: flex-start; margin-top: 6px; }
   .hint .cmd pre { flex: 1; background: var(--code); padding: 6px 8px; border-radius: 6px; }
   button { font: inherit; font-size: 12px; cursor: pointer; border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 6px; padding: 4px 8px; }
@@ -155,7 +156,9 @@ let selected = decodeURIComponent(location.hash.slice(1)) || null;
 const pref = (k, d) => { try { return JSON.parse(localStorage.getItem(`orch.${k}`)) ?? d; } catch { return d; } };
 const setPref = (k, v) => { try { localStorage.setItem(`orch.${k}`, JSON.stringify(v)); } catch {} };
 let filter = pref("filter", "all");
-let scope = pref("scope", "branch");  // "branch": only stories started from your checkout; "all": everything
+// "branch": only stories started from your checkout; "all": everything on this machine. Not remembered:
+// the dashboard is your cockpit for the story you are on, and "all" is a look around.
+let scope = "branch";
 const openStages = new Set();
 const FILTERS = {
   all: ["All", () => true],
@@ -183,16 +186,20 @@ function view(s = state) {
   const tasks = s.tasks.filter((t) => plans.has(t.plan));
   const ids = new Set(tasks.map((t) => t.id));
   return { ...s, tasks, stories: (s.stories || []).filter((st) => plans.has(st.plan)),
+           hints: s.hints.filter((h) => !h.plan || plans.has(h.plan)),
            events: s.events.filter((e) => !e.task || ids.has(e.task)) };
 }
 
 function renderScope(s) {
-  const n = branchPlans(s).size, total = (s.stories || []).length;
-  const opts = { branch: [`This branch`, n, `Only stories started from ${s.git.branch}`], all: ["All", total, "Every story and task"] };
-  document.getElementById("scope").innerHTML = Object.entries(opts).map(([k, [label, count, title]]) =>
-    `<button class="chip ${scope === k ? "on" : ""}" data-scope="${k}" title="${esc(title)}">${label}<span class="n">${count}</span></button>`).join("");
-  document.querySelectorAll("#scope [data-scope]").forEach((b) => (b.onclick = () => {
-    scope = b.dataset.scope; setPref("scope", scope);
+  const n = branchPlans(s).size, total = (s.stories || []).length, el = document.getElementById("scope");
+  el.innerHTML = scope === "branch"
+    ? `<span class="chip on" title="Only stories started from ${esc(s.git.branch)}">This branch<span class="n">${n}</span></span>`
+      + (total > n ? `<a href="#" data-scope="all" class="muted" title="Every story and task on this machine">show all ${total}</a>` : "")
+    : `<span class="chip on" title="Every story and task on this machine">All stories<span class="n">${total}</span></span>`
+      + `<a href="#" data-scope="branch" class="muted">back to ${esc(s.git.branch)}</a>`;
+  el.querySelectorAll("[data-scope]").forEach((a) => (a.onclick = (ev) => {
+    ev.preventDefault();
+    scope = a.dataset.scope;
     if (state) renderAll();
   }));
 }
@@ -263,19 +270,25 @@ function renderStories(s) {
   const list = s.stories || [];
   document.getElementById("stories-section").hidden = !list.length;
   document.getElementById("stories").innerHTML = list.map((st, i) => {
-    const [color, label] = st.complete
+    const [color, label] = st.shipped ? ["--rejected", `shipped · in ${st.mainline}`]
+      : st.complete
       ? (!st.checked ? ["--info", "complete · checks skipped (dry run)"] : st.ok ? ["--ok", "complete · all checks passed"] : ["--failed", "complete · checks FAILED"])
       : st.integrating ? ["--claimed", "in progress"] : ["--pending", "not started"];
     const failed = (st.checks || []).filter((c) => !c.ok);
-    return `<div class="card hint" style="--c:var(${color})">
+    const body = `${failed.map((c) => `<details open><summary>${esc(c.gate)} gate failed</summary><pre class="box err">${esc(c.output)}</pre></details>`).join("")}
+      ${leadBlock(st)}
+      ${st.review ? `<div class="cmd"><pre>${esc(st.review)}</pre><button data-story="${i}">copy</button></div>` : ""}`;
+    // A shipped story is history: keep its details, but folded away.
+    return `<div class="card hint ${st.shipped ? "shipped" : ""}" style="--c:var(${color})">
       <div class="row"><b>${esc(st.plan)}</b><code>${esc(st.branch)}</code><span class="muted">${label}</span>
         <span class="muted">${st.done}/${st.tasks} tasks merged${st.complete ? ` · ${st.commits} commits · ${st.files} files` : ""}${st.base ? ` · from ${esc(st.base)}` : ""}${st.proposals?.length ? ` · ${st.proposals.length} proposal(s) waiting` : ""}</span></div>
-      ${failed.map((c) => `<details open><summary>${esc(c.gate)} gate failed</summary><pre class="box err">${esc(c.output)}</pre></details>`).join("")}
-      ${leadBlock(st)}
-      ${st.review ? `<div class="cmd"><pre>${esc(st.review)}</pre><button data-story="${i}">copy</button></div>` : ""}
+      ${st.shipped ? `<details data-shipped="${esc(st.plan)}" ${openShipped.has(st.plan) ? "open" : ""}><summary class="muted">Details</summary>${body}</details>` : body}
     </div>`;
   }).join("");
   document.querySelectorAll("#stories [data-story]").forEach((b) => (b.onclick = () => copy(b, list[b.dataset.story].review)));
+  document.querySelectorAll("#stories details[data-shipped]").forEach((d) => d.addEventListener("toggle", () => {
+    d.open ? openShipped.add(d.dataset.shipped) : openShipped.delete(d.dataset.shipped);
+  }));
   document.querySelectorAll("#stories details[data-report]").forEach((d) => d.addEventListener("toggle", () => {
     const f = d.dataset.report;
     d.open ? openReports.add(f) : openReports.delete(f);
@@ -288,7 +301,7 @@ const LEAD = {
   changes_requested: ["--warn", "changes requested"],
   error: ["--failed", "review failed"],
 };
-const openReports = new Set(), reports = {};
+const openReports = new Set(), openShipped = new Set(), reports = {};
 async function loadReport(file) {
   try {
     const res = await fetch(`/${file}`, { cache: "no-store" });
@@ -398,7 +411,7 @@ function renderTasks(s) {
       : scope === "branch" && state.tasks.length ? `No tasks on ${esc(s.git.branch)}. <a href="#" id="showall">Show all ${state.tasks.length}</a>`
       : "No tasks queued."}</div>`;
   const all = document.getElementById("showall");
-  if (all) all.onclick = (ev) => { ev.preventDefault(); scope = "all"; setPref("scope", scope); renderAll(); };
+  if (all) all.onclick = (ev) => { ev.preventDefault(); scope = "all"; renderAll(); };
   document.querySelectorAll("#stages details.stage").forEach((d) => d.addEventListener("toggle", () => {
     const n = Number(d.dataset.stage);
     d.open ? openStages.add(n) : openStages.delete(n);

@@ -177,15 +177,26 @@ def _planner_info():
     }
 
 
+def _contains(target: str, ref: str) -> bool:
+    return git("merge-base", "--is-ancestor", ref, target, check=False).returncode == 0
+
+
 def _stories_info(rows: list) -> list:
     """One entry per plan: its story branch, progress, and (once complete) the final check."""
     plans = sorted({stories.plan_of(r) for r in rows} | {p.stem for p in stories.STORIES_DIR.glob("*.json")})
+    mainline = stories.mainline()
     out = []
     for plan in plans:
         mine = [r for r in rows if stories.plan_of(r) == plan]
         rec = stories.info(plan)
         open_ = [r for r in mine if r["status"] in stories.ACTIVE]
         waiting = [r["id"] for r in mine if r["status"] == "proposed"]
+        complete = bool(rec.get("completed_at")) and not open_
+        local = [b for b in (stories.branch(plan), stories.pr_branch(plan)) if stories.branch_exists(b)]
+        merged = [b for b in local if mainline and _contains(mainline, b)]
+        # Shipped: the story (or its squashed pr/ commit) is in the mainline, or its branches were
+        # deleted after it was complete, i.e. it was merged and cleaned up.
+        shipped = complete and bool(mainline) and (not local or bool(merged))
         out.append({
             "plan": plan,
             "branch": stories.branch(plan),
@@ -194,7 +205,13 @@ def _stories_info(rows: list) -> list:
             "done": sum(1 for r in mine if r["status"] == "done"),
             "open": len(open_),
             "proposals": waiting,
-            "complete": bool(rec.get("completed_at")) and not open_,
+            "complete": complete,
+            "shipped": shipped,
+            "mainline": mainline,
+            # Local branches left over once shipped: merged ones can go with `git branch -d`; the
+            # others were squashed into a merged pr/ commit and need -D.
+            "leftover_merged": merged if shipped else [],
+            "leftover_squashed": [b for b in local if b not in merged] if shipped else [],
             "integrating": stories.worktree_path(plan).exists(),
             "commits": rec.get("commits"),
             "files": rec.get("files"),
@@ -227,6 +244,14 @@ def _plans_info(queued: set) -> list:
 
 # ---------------------------------------------------------------- next steps
 
+def _merged_commands(st: dict) -> str:
+    """For a story fast-forwarded onto its base: push it, and open a PR unless the base is the mainline
+    itself (then pushing is all there is)."""
+    branch, local_main = st["merged_into"], (stories.mainline() or "origin/main").split("/", 1)[-1]
+    log = f"git log --oneline -3 {branch}\n"
+    return log + ("git push" if branch == local_main else stories.pr_command(st["plan"], branch))
+
+
 def _hints(s: dict) -> list:
     """Ordered list of {level: action|warn|info|ok, text, cmd?} — the dashboard's "what now?" panel."""
     hints = []
@@ -235,8 +260,23 @@ def _hints(s: dict) -> list:
     by = lambda st: [r for r in rows if r["status"] == st]
     done_ids = {r["id"] for r in by("done")}
 
+    shipped = [st for st in s["stories"] if st["shipped"]]
+    shipped_plans = {st["plan"] for st in shipped}
+    branch = s["git"]["branch"]
+    if shipped:
+        mainline = shipped[0]["mainline"]
+        local_main = mainline.split("/", 1)[-1]
+        based_here = [st for st in s["stories"] if st["base"] == branch]
+        if based_here and branch != local_main and all(st["shipped"] for st in based_here) \
+                and _contains(mainline, "HEAD"):
+            dirty = (f" Commit or stash your {len(s['git']['dirty'])} uncommitted change(s) first."
+                     if s["git"]["dirty"] else "")
+            add("action", f"You are on {branch}, which is already merged into {mainline}. "
+                          f"Switch back to {local_main} before you start the next story.{dirty}",
+                f"git switch {local_main} && git pull")
+
     for st in s["stories"]:
-        if st["complete"]:
+        if st["complete"] and not st["shipped"]:
             checks = ("checks skipped (dry run)" if not st["checked"]
                       else "all checks passed" if st["ok"] else "checks FAILED (see the story card)")
             waiting = (f" {len(st['proposals'])} proposal(s) still wait for your decision; review the branch first, "
@@ -248,14 +288,15 @@ def _hints(s: dict) -> list:
             where = (f"merged onto {st['merged_into']} as one commit" if st["merged_into"]
                      else f"squashed into one commit on {st['pr_branch']}" if st["pr_commit"]
                      else f"on branch {st['branch']}")
-            todo = ("Push it when you're happy with it." if st["merged_into"]
+            todo = ("Push it and open a pull request when you're happy with it." if st["merged_into"]
                     else f"It was not merged automatically ({st['merge_skipped']}). Review it and push it yourself."
                     if st["merge_skipped"] else "Review it and push it yourself.")
             good = (st["ok"] or not st["checked"]) and lead.get("verdict") in (None, "approve")
             add("ok" if good else "warn",
                 f"Story {st['plan']} is ready, {where}: {st['commits']} task commits, "
                 f"{st['files']} files, {checks}.{verdict} {todo}{waiting}",
-                f"git log --oneline -3 {st['merged_into']}\ngit push" if st["merged_into"] else st["review"])
+                _merged_commands(st) if st["merged_into"] else st["review"])
+            hints[-1]["plan"] = st["plan"]
 
     if planner and not planner["finished"] and time.time() - planner["updated"] < 120:
         add("info", f"Planner is working on {planner['name']}: {planner['tool_count']} files/commands read, "
@@ -274,13 +315,13 @@ def _hints(s: dict) -> list:
                         "and agents have no MongoDB MCP server. Stop it (Ctrl-C) and restart in a terminal that has it.",
                 "make mongo && export MONGO_TEST_URI=mongodb://localhost:27017 && make run")
 
+    unloaded = [p for p in s["plans"] if p["loaded"] == "none"]
+    if not run["active"]:
+        for p in unloaded:
+            add("action", f"Plan {p['file']} ({p['tasks']} tasks) is not queued. Review it, commit it, then load it.",
+                f"make load PLAN={p['file']}")
     if not rows:
-        unloaded = [p for p in s["plans"] if p["loaded"] == "none"]
-        if unloaded:
-            for p in unloaded:
-                add("action", f"Plan {p['file']} ({p['tasks']} tasks) is not queued. Review it, commit it, then load it.",
-                    f"make load PLAN={p['file']}")
-        else:
+        if not unloaded:
             add("action", "Nothing planned yet. Write a story (copy backlog/stories/TEMPLATE.md), then plan it.",
                 "make plan STORY=<story-name>")
         return hints
@@ -291,7 +332,9 @@ def _hints(s: dict) -> list:
                       "Go through them one by one in the terminal (approve, reject, or chat about each).",
             "make review")
 
-    parked = [r["id"] for r in by("rejected") if r.get("parked")]
+    parked_all = [r for r in by("rejected") if r.get("parked")]
+    parked = [r["id"] for r in parked_all if r["plan"] not in shipped_plans]
+    parked_shipped = [r["id"] for r in parked_all if r["plan"] in shipped_plans]
     if parked:
         add("info", f"{len(parked)} low-severity proposal(s) were parked automatically: they are in the reports "
                     "but don't run. Approve one if you want it after all.",
@@ -304,6 +347,7 @@ def _hints(s: dict) -> list:
                       + (f" — it blocks {', '.join(blocked)}." if blocked else "")
                       + " Click it for the full error and the agent's log; adjust its prompt/scope if needed, then retry.",
             f"make retry IDS={r['id']}")
+        hints[-1]["plan"] = r["plan"]
 
     pending = by("pending")
     ready = [r for r in pending if set(r.get("depends_on") or []) <= done_ids]
@@ -335,4 +379,27 @@ def _hints(s: dict) -> list:
     for st in unfinished:
         add("action", f"All tasks of {st['plan']} are merged into {st['branch']}, but the final check hasn't run yet. "
                       "It runs when `make run` finishes; start it once more to finalize.", "make run")
+        hints[-1]["plan"] = st["plan"]
+
+    idle = not run["active"] and not any(r["status"] in stories.ACTIVE + ("proposed",) for r in rows)
+    if idle and not unloaded and s["stories"] and all(st["shipped"] for st in s["stories"]):
+        add("action", f"All {len(s['stories'])} stories are shipped. Write the next one "
+                      "(copy backlog/stories/TEMPLATE.md), then plan it.",
+            "make plan STORY=backlog/stories/<next-story>.md")
+
+    merged = [b for st in shipped for b in st["leftover_merged"]]
+    squashed = [b for st in shipped for b in st["leftover_squashed"]]
+    bases = sorted({st["base"] for st in shipped if st["base"] and st["base"] != branch
+                    and st["base"] != shipped[0]["mainline"].split("/", 1)[-1]
+                    and stories.branch_exists(st["base"]) and _contains(st["mainline"], st["base"])})
+    if merged or squashed or bases:
+        cmd = "\n".join(filter(None, [
+            f"git branch -d {' '.join(bases + merged)}" if bases or merged else "",
+            f"git branch -D {' '.join(squashed)}   # squashed into a pr/ commit that is merged" if squashed else ""]))
+        add("info", f"{len(bases) + len(merged) + len(squashed)} local branch(es) of shipped stories are left over. "
+                    "Delete them when you no longer need them (-d refuses anything that isn't merged).", cmd)
+    if parked_shipped:
+        add("info", f"{len(parked_shipped)} parked low-severity proposal(s) belong to stories already in "
+                    f"{shipped[0]['mainline']}: {', '.join(parked_shipped)}. Approving one would reopen a merged "
+                    "story; if one still matters, take it into a new story.")
     return hints

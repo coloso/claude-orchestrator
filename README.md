@@ -225,7 +225,9 @@ git push -u origin story/S02-shopping-list
 ### Monitoring and troubleshooting
 
 - **Dashboard:** run `make dashboard` in a second terminal and keep http://localhost:8765/orchestration/dashboard/ open. `make run` serves it too, while it runs.
-  - **What now?** The next step, with the exact command to copy. It covers: load a plan, commit first, MongoDB is down, `MONGO_TEST_URI` is missing from the run, run stage 1 and review it, a task failed so retry it, proposals are waiting, or everything is merged so check it.
+  - **What now?** The next step, with the exact command to copy. It covers: load a plan, commit first, MongoDB is down, `MONGO_TEST_URI` is missing from the run, run stage 1 and review it, a task failed so retry it, proposals are waiting, or the story is ready, so push it and open a pull request.
+  - **Shipped stories** (already in `origin/main`) drop out of "What now?". Their cards stay greyed out under Stories. The panel then suggests switching back to `main`, writing the next story, and deleting leftover branches.
+  - **Scope:** the dashboard shows the stories started from the branch you have checked out. "show all" looks at every story on this machine until you reload.
   - **Planner:** while `make plan` runs, the files it read and its thinking-token count. If those numbers grow, it isn't hung.
   - **Tasks by stage:** stages come from the dependencies, and proposals have their own lane. Each card shows status, model and effort, duration and cost, and the agent's current tool call.
   - **Click a task** for its prompt, scope, dependencies, errors and the agent's step-by-step log for every attempt.
@@ -251,6 +253,17 @@ git push -u origin story/S02-shopping-list
 make dry-run PLAN=backlog/plans/<plan>.json    # or: make load PLAN=… && python3 orchestration/orchestrator/orchestrator.py run --fake
 git branch -D story/<plan> && make reset
 ```
+
+### Working in a team
+
+Every developer runs their own orchestrator, with their own agents, Claude login and MongoDB (`make mongo`). The dashboard is your cockpit for the story on your branch. It never sees other people's runs. What the team shares is Git: stories and plans in `backlog/`, and results as pull requests.
+
+- **One story, one developer, one feature branch.** Claim a story before you plan it, with a GitHub issue or a draft PR, so nobody plans it twice. Start it from `main`: `git switch -c feature/s-05-<slug>`.
+- **Unique story numbers.** The number goes into branch names (`story/s-05-…`) and task IDs (`S05-01`), so two stories must never share one. Merge the story file to `main` early to claim its number.
+- **Push only the PR branch.** `story/*`, `pr/*` and `agent/*` are local working branches. When a story is ready, "What now?" gives you the push and `gh pr create` commands (needs the [GitHub CLI](https://cli.github.com)). The lead engineer's review becomes the PR description, so reviewers see it without access to your `.orch/`.
+- **After the merge,** `git switch main && git pull`. The dashboard marks the story as shipped and offers to clean up its branches.
+
+There is no shared view of everyone's running agents or total cost. Each dashboard shows only its own machine.
 
 ## How it works
 

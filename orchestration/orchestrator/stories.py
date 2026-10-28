@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import subprocess
 import time
 from fnmatch import fnmatch
@@ -308,6 +309,26 @@ def merge_into_base(pr: str, base: str) -> dict:
     return {"merged_into": base, "merged_commit": git("rev-parse", "--short=10", pr).stdout.strip()}
 
 
+def mainline() -> str:
+    """The remote default branch (e.g. origin/main), or "" without a remote. A story counts as shipped
+    once it is in there; local main doesn't count, since merge_into_base may have put it there unpushed."""
+    head = git("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD", check=False).stdout.strip()
+    for ref in (head, "origin/main", "origin/master"):
+        if ref and git("rev-parse", "--verify", "--quiet", ref, check=False).returncode == 0:
+            return ref
+    return ""
+
+
+def pr_command(plan: str, head: str) -> str:
+    """Push `head` and open a pull request into the mainline with the GitHub CLI. The lead's review
+    becomes the PR description, so reviewers see it without access to this machine's .orch/."""
+    s, base = info(plan), (mainline() or "origin/main").split("/", 1)[-1]
+    report = (s.get("review") or {}).get("report")
+    body = f"--title {shlex.quote(s.get('pr_title') or plan)} --body-file {report}" if report else "--fill"
+    return (f"git push -u origin {head}\n"
+            f"gh pr create --base {base} --head {head} {body}")
+
+
 def review_commands(plan: str) -> str:
     s = info(plan)
     b, base = branch(plan), s.get("base", "main")
@@ -318,11 +339,11 @@ def review_commands(plan: str) -> str:
                 + f"git show --stat {pr}                # the story as one commit\n"
                 f"git log --oneline --graph {base}..{b}   # per-task history\n"
                 f"git switch {pr} && make check      # try it, e.g. make up\n"
-                f"git push -u origin {pr}            # then open a pull request")
+                + pr_command(plan, pr))
     return (f"git log --oneline --graph {base}..{b}\n"
             f"git diff --stat {base}...{b}\n"
             f"git switch {b} && make check      # try it, e.g. make up\n"
-            f"git push -u origin {b}            # then open a pull request")
+            + pr_command(plan, b))
 
 
 def print_summary(plan: str) -> None:
