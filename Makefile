@@ -18,8 +18,17 @@ help: ## Show this beautifully categorized help menu
 	@echo ""
 
 # @ 🎭 Orchestration & Agents
-plan:             ## 📜 Generate plan from story -> backlog/plans/
+plan:             ## 📜 Generate plan from story -> backlog/plans/ (no STORY: the latest story, unless already planned)
+ifdef STORY
 	$(ORCH) plan "$(STORY)"
+else
+	@story=$$(ls backlog/stories/*.md | grep -v '/TEMPLATE\.md$$' | sort | tail -n 1); \
+	if [ -z "$$story" ]; then echo "No story in backlog/stories/. Create one: cp backlog/stories/TEMPLATE.md backlog/stories/s-NN-<slug>.md"; exit 1; fi; \
+	plan="backlog/plans/$$(basename "$$story" .md).json"; \
+	if [ -e "$$plan" ]; then echo "Latest story $$story is already planned: $$plan"; echo "Queue it with:  make load PLAN=$$plan"; exit 0; fi; \
+	echo "Planning latest story: $$story"; \
+	$(ORCH) plan "$$story"
+endif
 
 load:             ## 📥 Queue tasks from plan JSON
 	$(ORCH) load $(PLAN)
